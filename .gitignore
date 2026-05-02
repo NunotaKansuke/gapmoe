@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+*.o
+*.so
+*.dylib
+*.dll
+
+# Local build outputs from bundled/preprocessing binaries.
+src/genulens/calc_mass_distribution_each
+src/genulens/calc_rhon_at_Dlb
+src/genulens/genulens_helio
+src/genulens/murel_sampling
+src/genulens/murel_sampling_2d
+
+# Local data and generated analysis outputs.
+*.bsp
+*.npy
+ML_hist/
+murel_hist/
+rhos_hist/
+test_data/
+test_result/
+result/
