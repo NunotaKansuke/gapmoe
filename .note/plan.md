@@ -407,6 +407,14 @@ Do the next implementation in this order:
 - The notebook samples the Galactic prior itself. Real event likelihoods should be added inside its `log_probability` function.
 - Generated pre-run files go under `example/pre_runner_outputs/` and should not be treated as source files.
 
+2026-05-02, murel performance:
+
+- The first `MurelHistogram` implementation searched `rows` by boolean masks on every density evaluation.
+- This became slow for large grids such as `DL=[0,10000]`, `DS=[0,16000]`, `step=100`, where `murel.dat` can be tens of MB.
+- Updated `MurelHistogram` to build `(DS, DL) -> row slice` block indices at load time.
+- It also parses the `# Grid: DL ...` and `# Grid: DS ...` header metadata for inspection/debugging.
+- Density evaluation now looks only at the small murel/phi block for the relevant neighboring grid cells, instead of scanning the whole table.
+
 Smoke checks:
 
 - `py_compile` passed for new modules.
@@ -416,6 +424,7 @@ Smoke checks:
 - `GalacticModel.from_paths(...)` loads `/tmp/gapmoe_prerunner_smoke/small_source_default` and returns the same `log_galactic_prior` as `log_prob`.
 - `from gapmoe.gapmoe import GalacticModel, gapmoe` remains import-compatible.
 - `example/emcee_physical_params.ipynb` passes JSON validation and all code cells compile.
+- On `example/pre_runner_outputs/emcee_demo/murel.dat` with 788400 rows and 10950 `(DS, DL)` blocks, load time was about 2.9 s and 1000 repeated `log_prob` evaluations took about 0.22 s.
 
 Important caveats:
 

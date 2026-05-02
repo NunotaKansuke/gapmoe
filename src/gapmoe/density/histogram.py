@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from math import isfinite, log, pi
 from pathlib import Path
@@ -123,14 +124,31 @@ class DistanceDensityTable:
 class MurelHistogram:
     rows: np.ndarray
     pairs: np.ndarray
+    block_slices: dict[tuple[float, float], slice]
+    ds_values: np.ndarray
+    dl_values: np.ndarray
+    pair_scale: np.ndarray
+    grid: dict[str, float]
 
     @classmethod
     def from_file(cls, path: str | Path) -> "MurelHistogram":
+        grid = _parse_murel_grid(path)
         rows = _load_2d(path)
         if rows.shape[1] < 6:
             raise ValueError(f"murel table has {rows.shape[1]} columns, expected at least 6: {path}")
-        pairs = np.unique(rows[:, 0:2], axis=0)
-        return cls(rows=rows, pairs=pairs)
+        pairs, block_slices = _build_pair_blocks(rows)
+        ds_values = np.unique(pairs[:, 0])
+        dl_values = np.unique(pairs[:, 1])
+        pair_scale = np.array([max(np.ptp(ds_values), 1.0), max(np.ptp(dl_values), 1.0)])
+        return cls(
+            rows=rows,
+            pairs=pairs,
+            block_slices=block_slices,
+            ds_values=ds_values,
+            dl_values=dl_values,
+            pair_scale=pair_scale,
+            grid=grid,
+        )
 
     def densities(self, dl_pc: float, ds_pc: float, mu: float, phi: float) -> tuple[float, float]:
         if ds_pc <= dl_pc:
@@ -151,8 +169,11 @@ class MurelHistogram:
         return float(pair[0]), float(pair[1])
 
     def _densities_for_pair(self, pair: np.ndarray, mu: float, phi: float) -> tuple[float, float]:
-        mask = (self.rows[:, 0] == pair[0]) & (self.rows[:, 1] == pair[1])
-        block = self.rows[mask]
+        key = (float(pair[0]), float(pair[1]))
+        block_slice = self.block_slices.get(key)
+        if block_slice is None:
+            return 0.0, 0.0
+        block = self.rows[block_slice]
 
         mu_x = block[:, 2]
         mu_y = block[:, 4]
@@ -165,10 +186,8 @@ class MurelHistogram:
         return p_mu, p_phi
 
     def _weighted_pair_densities(self, dl_pc: float, ds_pc: float, mu: float, phi: float) -> Optional[tuple[float, float]]:
-        dl_values = np.unique(self.pairs[:, 1])
-        ds_values = np.unique(self.pairs[:, 0])
-        dl_neighbors = _bracketing_values(dl_values, dl_pc)
-        ds_neighbors = _bracketing_values(ds_values, ds_pc)
+        dl_neighbors = _bracketing_values(self.dl_values, dl_pc)
+        ds_neighbors = _bracketing_values(self.ds_values, ds_pc)
         if not dl_neighbors or not ds_neighbors:
             return None
 
@@ -181,8 +200,8 @@ class MurelHistogram:
                     continue
                 if not self._has_pair(ds_val, dl_val):
                     continue
-                distance = abs(ds_pc - ds_val) / max(np.ptp(ds_values), 1.0)
-                distance += abs(dl_pc - dl_val) / max(np.ptp(dl_values), 1.0)
+                distance = abs(ds_pc - ds_val) / self.pair_scale[0]
+                distance += abs(dl_pc - dl_val) / self.pair_scale[1]
                 weight = 1.0 / max(distance, 1e-12)
                 p_mu, p_phi = self._densities_for_pair(np.array([ds_val, dl_val]), mu, phi)
                 weighted_mu += weight * p_mu
@@ -194,12 +213,11 @@ class MurelHistogram:
         return weighted_mu / weight_sum, weighted_phi / weight_sum
 
     def _has_pair(self, ds_pc: float, dl_pc: float) -> bool:
-        return bool(np.any((self.pairs[:, 0] == ds_pc) & (self.pairs[:, 1] == dl_pc)))
+        return (float(ds_pc), float(dl_pc)) in self.block_slices
 
     def _nearest_pair(self, dl_pc: float, ds_pc: float) -> np.ndarray:
-        scale = np.array([max(np.ptp(self.pairs[:, 0]), 1.0), max(np.ptp(self.pairs[:, 1]), 1.0)])
         target = np.array([ds_pc, dl_pc])
-        idx = np.argmin(np.sum(((self.pairs - target) / scale) ** 2, axis=1))
+        idx = np.argmin(np.sum(((self.pairs - target) / self.pair_scale) ** 2, axis=1))
         return self.pairs[idx]
 
 
@@ -284,6 +302,45 @@ def _load_2d(path: str | Path) -> np.ndarray:
     if data.size == 0:
         raise ValueError(f"empty table: {path}")
     return np.atleast_2d(data)
+
+
+def _parse_murel_grid(path: str | Path) -> dict[str, float]:
+    grid: dict[str, float] = {}
+    pattern = re.compile(
+        r"# Grid: (?P<name>DL|DS) "
+        r"\[(?P<min>[-+0-9.eE]+), (?P<max>[-+0-9.eE]+)\] "
+        r"step (?P<step>[-+0-9.eE]+) pc "
+        r"\((?P<bins>\d+) bins\)"
+    )
+    with Path(path).open() as file:
+        for line in file:
+            if not line.startswith("#"):
+                break
+            match = pattern.match(line.strip())
+            if match is None:
+                continue
+            name = match.group("name")
+            grid[f"{name}min"] = float(match.group("min"))
+            grid[f"{name}max"] = float(match.group("max"))
+            grid[f"{name}step"] = float(match.group("step"))
+            grid[f"{name}bins"] = float(match.group("bins"))
+    return grid
+
+
+def _build_pair_blocks(rows: np.ndarray) -> tuple[np.ndarray, dict[tuple[float, float], slice]]:
+    pair_columns = rows[:, 0:2]
+    starts = [0]
+    for idx in np.nonzero(np.any(pair_columns[1:] != pair_columns[:-1], axis=1))[0] + 1:
+        starts.append(int(idx))
+    starts_arr = np.array(starts, dtype=int)
+    ends_arr = np.append(starts_arr[1:], len(rows))
+
+    pairs = pair_columns[starts_arr]
+    block_slices = {
+        (float(pair[0]), float(pair[1])): slice(int(start), int(end))
+        for pair, start, end in zip(pairs, starts_arr, ends_arr)
+    }
+    return pairs, block_slices
 
 
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:
