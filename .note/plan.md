@@ -370,12 +370,26 @@ Do the next implementation in this order:
 - `HistogramDensity` reads current `PreRunner` outputs: `mass.dat`, `rho.dat`, `murel.dat`.
 - Added public lazy exports for `PhysicalParams` and `HistogramDensity`.
 - Parameterization code was intentionally not touched in this step.
+- Committed this density layer as `bb93116 Add histogram density model`.
+
+2026-05-02, next step:
+
+- Added `src/gapmoe/priors/galactic.py` with `GalacticPrior`.
+- `GalacticPrior` composes:
+  - a `DensityModel`;
+  - optional event-rate factor;
+  - optional parameterization hook;
+  - optional extra user prior.
+- The implemented default path is intentionally conservative: without a parameterization, `log_prob(...)` accepts only `PhysicalParams`.
+- The parameterization interface is currently a thin protocol only. No concrete light-curve parameter transformations have been moved yet.
+- Added public lazy export for `GalacticPrior`.
 
 Smoke checks:
 
 - `py_compile` passed for new modules.
 - `HistogramDensity.from_paths(...)` loaded `/tmp/gapmoe_prerunner_smoke/small/{mass,rho,murel}.dat`.
 - For `PhysicalParams(ML=0.3, DL=250, DS=600, mu_N=5, mu_E=2)`, `HistogramDensity` returned finite `log_density` and `log_prior`.
+- `GalacticPrior(HistogramDensity).log_prob(PhysicalParams(...))` matches `HistogramDensity.log_prior(...)` exactly on `/tmp/gapmoe_prerunner_smoke/small_source_default`.
 
 Important caveats:
 

@@ -5,6 +5,7 @@ __all__ = [
     "SourceSelection",
     "PhysicalParams",
     "HistogramDensity",
+    "GalacticPrior",
 ]
 
 
@@ -30,4 +31,8 @@ def __getattr__(name):
         from .density import HistogramDensity
 
         return HistogramDensity
+    if name == "GalacticPrior":
+        from .priors import GalacticPrior
+
+        return GalacticPrior
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
