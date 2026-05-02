@@ -1,4 +1,11 @@
-__all__ = ["gapmoe", "PreRunner", "PreRunResult", "SourceSelection"]
+__all__ = [
+    "gapmoe",
+    "PreRunner",
+    "PreRunResult",
+    "SourceSelection",
+    "PhysicalParams",
+    "HistogramDensity",
+]
 
 
 def __getattr__(name):
@@ -15,4 +22,12 @@ def __getattr__(name):
             "SourceSelection": SourceSelection,
         }
         return exports[name]
+    if name == "PhysicalParams":
+        from .physical import PhysicalParams
+
+        return PhysicalParams
+    if name == "HistogramDensity":
+        from .density import HistogramDensity
+
+        return HistogramDensity
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

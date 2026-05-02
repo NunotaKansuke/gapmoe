@@ -19,7 +19,12 @@ OptionMap = Mapping[str, Union[OptionValue, OptionSequence]]
 
 @dataclass(frozen=True)
 class SourceSelection:
-    """Source weighting and extinction options for calc_rho_profile."""
+    """Source weighting and extinction options for calc_rho_profile.
+
+    PreRunner enables Genulens source weighting by default. If no explicit
+    selection options are supplied, calc_rho_profile uses the same fallback
+    source weighting as genulens.cpp.
+    """
 
     enabled: bool = False
     i_mag: Optional[float] = None
@@ -185,6 +190,7 @@ class PreRunner:
 
         rho_base: Dict[str, Union[OptionValue, OptionSequence]] = {
             **base_options,
+            "SOURCE": 1,
             "Dmin": d_min_pc,
             "Dmax": d_max_pc,
             "Dstep": d_step_pc,
