@@ -396,6 +396,17 @@ Do the next implementation in this order:
   - `ra_deg` and `dec_deg`, in which case it runs `PreRunner`.
 - Legacy method names such as `get_joint_log_density`, `log_galactic_prior`, and `get_density_M_given_DL` now delegate to the new density/prior objects.
 
+2026-05-02, examples:
+
+- Added `example/emcee_physical_params.ipynb`.
+- The notebook demonstrates the current canonical workflow:
+  - run `PreRunner` for one sky position;
+  - build `GalacticModel` from the generated `mass.dat`, `rho.dat`, and `murel.dat`;
+  - evaluate `PhysicalParams(ML, DL, DS, mu_N, mu_E)`;
+  - sample those five physical parameters with `emcee`.
+- The notebook samples the Galactic prior itself. Real event likelihoods should be added inside its `log_probability` function.
+- Generated pre-run files go under `example/pre_runner_outputs/` and should not be treated as source files.
+
 Smoke checks:
 
 - `py_compile` passed for new modules.
@@ -404,6 +415,7 @@ Smoke checks:
 - `GalacticPrior(HistogramDensity).log_prob(PhysicalParams(...))` matches `HistogramDensity.log_prior(...)` exactly on `/tmp/gapmoe_prerunner_smoke/small_source_default`.
 - `GalacticModel.from_paths(...)` loads `/tmp/gapmoe_prerunner_smoke/small_source_default` and returns the same `log_galactic_prior` as `log_prob`.
 - `from gapmoe.gapmoe import GalacticModel, gapmoe` remains import-compatible.
+- `example/emcee_physical_params.ipynb` passes JSON validation and all code cells compile.
 
 Important caveats:
 
