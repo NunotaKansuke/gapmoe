@@ -1,19 +1,21 @@
 __all__ = [
-    "gapmoe",
+    "GalacticModel",
     "PreRunner",
     "PreRunResult",
     "SourceSelection",
     "PhysicalParams",
     "HistogramDensity",
     "GalacticPrior",
+    "gapmoe",
 ]
 
 
 def __getattr__(name):
-    if name == "gapmoe":
-        from .gapmoe import gapmoe
+    if name in {"GalacticModel", "gapmoe"}:
+        from .model import GalacticModel, gapmoe
 
-        return gapmoe
+        exports = {"GalacticModel": GalacticModel, "gapmoe": gapmoe}
+        return exports[name]
     if name in {"PreRunner", "PreRunResult", "SourceSelection"}:
         from .pre_runner import PreRunner, PreRunResult, SourceSelection
 

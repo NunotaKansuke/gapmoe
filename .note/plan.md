@@ -384,12 +384,26 @@ Do the next implementation in this order:
 - The parameterization interface is currently a thin protocol only. No concrete light-curve parameter transformations have been moved yet.
 - Added public lazy export for `GalacticPrior`.
 
+2026-05-02, compatibility wrapper:
+
+- Added `src/gapmoe/model.py` with `GalacticModel`.
+- `GalacticModel` is the public wrapper name. Avoid using `gapmoe.gapmoe` as the main user-facing name because `gapmoe` is the package/project name.
+- Replaced `src/gapmoe/gapmoe.py` with a small compatibility shim that exports `GalacticModel` and the deprecated lowercase `gapmoe` alias.
+- The wrapper can be built from:
+  - an existing `HistogramDensity`;
+  - a `PreRunResult`;
+  - explicit `mass/rho/murel` paths;
+  - `ra_deg` and `dec_deg`, in which case it runs `PreRunner`.
+- Legacy method names such as `get_joint_log_density`, `log_galactic_prior`, and `get_density_M_given_DL` now delegate to the new density/prior objects.
+
 Smoke checks:
 
 - `py_compile` passed for new modules.
 - `HistogramDensity.from_paths(...)` loaded `/tmp/gapmoe_prerunner_smoke/small/{mass,rho,murel}.dat`.
 - For `PhysicalParams(ML=0.3, DL=250, DS=600, mu_N=5, mu_E=2)`, `HistogramDensity` returned finite `log_density` and `log_prior`.
 - `GalacticPrior(HistogramDensity).log_prob(PhysicalParams(...))` matches `HistogramDensity.log_prior(...)` exactly on `/tmp/gapmoe_prerunner_smoke/small_source_default`.
+- `GalacticModel.from_paths(...)` loads `/tmp/gapmoe_prerunner_smoke/small_source_default` and returns the same `log_galactic_prior` as `log_prob`.
+- `from gapmoe.gapmoe import GalacticModel, gapmoe` remains import-compatible.
 
 Important caveats:
 
