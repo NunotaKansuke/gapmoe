@@ -430,6 +430,19 @@ Do the next implementation in this order:
 - `AUTOERR` remains on by default; Genulens' default target relative error is used unless `err_target` is explicitly supplied.
 - `mass.dat` remains generated from the Genulens mass model defaults. Normal users should not need to tune mass-grid settings.
 
+2026-05-02, murel bug investigation:
+
+- Symptom: MCMC samples had too many nearby lenses and relative proper motions with typical values around `mu ~ 15 mas/yr`, unlike the old `/moao38_7/nunota/gapmoe` histograms.
+- Event-rate formula in Python matches the old `calc_log_Gamma` structure: `DL^2 * thetaE * mu`.
+- Direct histogram comparison showed the problem exists before event-rate weighting:
+  - old `murel_hist_0.6_-3.2.dat`, near `(DS, DL)=(7750, 3750)`, had median `mu ~ 6.25 mas/yr`;
+  - new `pre_gapmoe/calc_murel_dist`, near the same block, had median `mu ~ 12-13 mas/yr`.
+- Root cause found in external `../genulens/pre_gapmoe/calc_murel_dist.cpp`.
+  - It computed relative proper motion like `(v_L - v_S) / D_L`.
+  - Correct behavior, matching old `genulens`, is `(v_L - v_sun) / D_L - (v_S - v_sun) / D_S`.
+- Patched both grid mode and single-point mode in `../genulens/pre_gapmoe/calc_murel_dist.cpp`.
+- Rebuilt `../genulens/pre_gapmoe/calc_murel_dist`.
+
 Smoke checks:
 
 - `py_compile` passed for new modules.
@@ -441,6 +454,7 @@ Smoke checks:
 - `example/emcee_physical_params.ipynb` passes JSON validation and all code cells compile.
 - On `example/pre_runner_outputs/emcee_demo/murel.dat` with 788400 rows and 10950 `(DS, DL)` blocks, load time was about 2.9 s and 1000 repeated `log_prob` evaluations took about 0.22 s.
 - Captured default `PreRunner` commands without running C binaries and confirmed `rho` uses `16000 pc / 1 pc`, while `murel` uses `16000 pc / 250 pc`.
+- After the external murel fix, a single-point check at `(DL, DS)=(3750, 7750)` with `Nsimu=200000` returned mean `mu ~ 6.02`, median `mu ~ 5.75`, and mode `mu ~ 5.25`, consistent with the old histogram scale.
 
 Important caveats:
 
