@@ -1,36 +1,34 @@
 from __future__ import annotations
 
-from math import hypot, isfinite
 from typing import Any, Callable, Optional, Protocol
 
-from gapmoe.density.base import DensityModel
-from gapmoe.priors.event_rate import log_event_rate
+import jax.numpy as jnp
+
+from gapmoe.priors.event_rate_jax import jax_log_event_rate
 
 PhysicalValues = tuple[float, float, float, float, float]
+MappingContext = dict[str, Any]
+ExtraLogPrior = Callable[[float, float, float, float, float], jnp.ndarray]
 
 
-class Parameterization(Protocol):
+class JaxParameterization(Protocol):
     """Map user/light-curve parameters into ML, DL, DS, mu_N, mu_E."""
 
     def to_physical(self, theta: Any, context: Optional[MappingContext] = None) -> PhysicalValues:
         ...
 
-    def log_abs_det_jacobian(self, theta: Any, context: Optional[MappingContext] = None) -> float:
+    def log_abs_det_jacobian(self, theta: Any, context: Optional[MappingContext] = None) -> jnp.ndarray:
         ...
 
 
-MappingContext = dict[str, Any]
-ExtraLogPrior = Callable[[float, float, float, float, float], float]
-
-
-class GalacticPrior:
-    """Compose a Galactic density model with event-rate and optional mappings."""
+class JaxGalacticPrior:
+    """JAX prior composition for density backends with a JAX log_density method."""
 
     def __init__(
         self,
-        density: DensityModel,
+        density: Any,
         *,
-        parameterization: Optional[Parameterization] = None,
+        parameterization: Optional[JaxParameterization] = None,
         include_event_rate: bool = True,
         extra_log_prior: Optional[ExtraLogPrior] = None,
     ) -> None:
@@ -39,49 +37,35 @@ class GalacticPrior:
         self.include_event_rate = include_event_rate
         self.extra_log_prior = extra_log_prior
 
-    def log_prob(self, theta: Any, *args: Any, context: Optional[MappingContext] = None) -> float:
+    def log_prob(self, theta: Any, *args: Any, context: Optional[MappingContext] = None) -> jnp.ndarray:
         if len(args) == 1 and isinstance(args[0], dict) and context is None:
             context = args[0]
             args = ()
         params, log_jacobian = self._to_physical(theta, args, context)
-        if not isfinite(log_jacobian):
-            return float("-inf")
-
         ML, DL, DS, mu_N, mu_E = params
-        mu = hypot(mu_N, mu_E)
+        mu = jnp.hypot(mu_N, mu_E)
 
         logp = self.density.log_density(ML, DL, DS, mu_N, mu_E)
-        if not isfinite(logp):
-            return float("-inf")
-
         if self.include_event_rate:
-            logp += log_event_rate(ML, DL, DS, mu)
-            if not isfinite(logp):
-                return float("-inf")
-
-        if log_jacobian != 0.0:
-            logp += log_jacobian
-            if not isfinite(logp):
-                return float("-inf")
+            logp = logp + jax_log_event_rate(ML, DL, DS, mu)
+        logp = logp + log_jacobian
 
         if self.extra_log_prior is not None:
-            logp += self.extra_log_prior(ML, DL, DS, mu_N, mu_E)
-            if not isfinite(logp):
-                return float("-inf")
+            logp = logp + self.extra_log_prior(ML, DL, DS, mu_N, mu_E)
 
-        return logp
+        return jnp.where(jnp.isfinite(logp), logp, -jnp.inf)
 
     def _to_physical(
         self,
         theta: Any,
         args: tuple[Any, ...],
         context: Optional[MappingContext],
-    ) -> tuple[PhysicalValues, float]:
+    ) -> tuple[PhysicalValues, jnp.ndarray]:
         if self.parameterization is None:
-            return _raw_values(theta, args), 0.0
+            return _raw_values(theta, args), jnp.asarray(0.0)
 
         if args:
-            raise TypeError("GalacticPrior with a parameterization expects one theta object, not raw arguments.")
+            raise TypeError("JaxGalacticPrior with a parameterization expects one theta object, not raw arguments.")
         values = _coerce_values(self.parameterization.to_physical(theta, context))
         log_jacobian = self.parameterization.log_abs_det_jacobian(theta, context)
         return values, log_jacobian
@@ -97,4 +81,4 @@ def _coerce_values(values: Any) -> PhysicalValues:
     if len(values) != 5:
         raise TypeError("log_prob expects ML, DL, DS, mu_N, mu_E.")
     ML, DL, DS, mu_N, mu_E = values
-    return float(ML), float(DL), float(DS), float(mu_N), float(mu_E)
+    return ML, DL, DS, mu_N, mu_E

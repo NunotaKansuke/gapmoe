@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import warnings
-from math import cos, sin
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 
 from gapmoe.density import HistogramDensity
-from gapmoe.physical import PhysicalParams
 from gapmoe.pre_runner import PreRunResult, PreRunner, SourceSelection
 from gapmoe.priors import GalacticPrior
 
@@ -151,7 +149,7 @@ class GalacticModel:
         mu_value: float,
         phi_value: float,
     ) -> float:
-        return self.density.log_density(_physical_from_mu_phi(ML_value, DL_value, DS_value, mu_value, phi_value))
+        return self.density.log_density_mu_phi(ML_value, DL_value, DS_value, mu_value, phi_value)
 
     def get_joint_log_density_given_DS(
         self,
@@ -166,13 +164,15 @@ class GalacticModel:
         p_mu, p_phi = self.get_density_mu_given_DL_DS(DL_value, DS_value, mu_value, phi_value)
         return self.safe_log(p_mass) + self.safe_log(p_dl) + self.safe_log(p_mu) + self.safe_log(p_phi)
 
-    def log_prob(self, params: PhysicalParams) -> float:
-        return self.prior.log_prob(params)
+    def log_prob(self, *args: Any) -> float:
+        if len(args) == 5:
+            return self.prior.log_prob(*args)
+        raise TypeError("log_prob expects ML, DL, DS, mu_N, mu_E.")
 
     def calc_log_Gamma(self, ML: float, DL: float, DS: float, mu: float) -> float:
         from gapmoe.priors.event_rate import log_event_rate
 
-        return log_event_rate(_physical_from_mu_phi(ML, DL, DS, mu, 0.0))
+        return log_event_rate(ML, DL, DS, mu)
 
     def log_galactic_prior(
         self,
@@ -182,7 +182,11 @@ class GalacticModel:
         mu_value: float,
         phi_value: float,
     ) -> float:
-        return self.prior.log_prob(_physical_from_mu_phi(ML_value, DL_value, DS_value, mu_value, phi_value))
+        log_density = self.get_joint_log_density(ML_value, DL_value, DS_value, mu_value, phi_value)
+        log_gamma = self.calc_log_Gamma(ML_value, DL_value, DS_value, mu_value)
+        if not np.isfinite(log_density) or not np.isfinite(log_gamma):
+            return float("-inf")
+        return float(log_density + log_gamma)
 
     def log_galactic_prior_given_DS(
         self,
@@ -232,10 +236,6 @@ class gapmoe(GalacticModel):
             stacklevel=2,
         )
         super().__init__(*args, **kwargs)
-
-
-def _physical_from_mu_phi(ML: float, DL: float, DS: float, mu: float, phi: float) -> PhysicalParams:
-    return PhysicalParams(ML=ML, DL=DL, DS=DS, mu_N=mu * cos(phi), mu_E=mu * sin(phi))
 
 
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:

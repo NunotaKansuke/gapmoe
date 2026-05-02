@@ -3,9 +3,10 @@ __all__ = [
     "PreRunner",
     "PreRunResult",
     "SourceSelection",
-    "PhysicalParams",
     "HistogramDensity",
+    "JaxHistogramDensity",
     "GalacticPrior",
+    "JaxGalacticPrior",
     "gapmoe",
 ]
 
@@ -25,16 +26,20 @@ def __getattr__(name):
             "SourceSelection": SourceSelection,
         }
         return exports[name]
-    if name == "PhysicalParams":
-        from .physical import PhysicalParams
-
-        return PhysicalParams
     if name == "HistogramDensity":
         from .density import HistogramDensity
 
         return HistogramDensity
+    if name == "JaxHistogramDensity":
+        from .density import JaxHistogramDensity
+
+        return JaxHistogramDensity
     if name == "GalacticPrior":
         from .priors import GalacticPrior
 
         return GalacticPrior
+    if name == "JaxGalacticPrior":
+        from .priors import JaxGalacticPrior
+
+        return JaxGalacticPrior
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

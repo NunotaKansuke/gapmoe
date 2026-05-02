@@ -13,6 +13,8 @@ Date: 2026-05-02
 - Main Python code lives under `src/gapmoe/`.
 - The bundled old Genulens C preprocessing copy under `src/genulens/` has been removed from the working tree.
 - Exploratory scripts and notebooks live under `test_tool/`.
+- Public-facing examples live under `example/`; `example/emcee_physical_params.ipynb` currently demonstrates the NumPy histogram backend by building `HistogramDensity` and `GalacticPrior` explicitly before sampling with `emcee` and `corner`.
+- Automated tests live under `tests/`; `pytest.ini` restricts default discovery there, and `tests/fixtures/small_source_default/` contains a small committed histogram fixture for NumPy/JAX backend parity checks.
 - Runtime histogram data is expected at absolute paths under `/moao38_7/nunota/gapmoe/`, but those data directories are not present in this checkout.
 - Initial git commit exists: `6d4d8dd Initial GAPMOE baseline`.
 - `src/gapmoe/pre_runner.py` has been added but is not committed yet.
@@ -21,12 +23,13 @@ Date: 2026-05-02
 
 ## `src/gapmoe`
 
-- `gapmoe.py` is the NumPy implementation of the galactic prior lookup.
-  - It converts input RA/Dec to galactic `(l, b)`.
-  - It snaps `(l, b)` to 0.2 degree bins.
-  - It loads three generated histogram products: mass, density along distance, and relative proper motion.
-  - It exposes density lookups and `log_galactic_prior`.
-- `gapmoeJax.py` mirrors the same model with JAX arrays and jitted prior/gradient methods.
+- `gapmoe.py` is now a compatibility shim around `GalacticModel`; the old monolithic model should not be the long-term public API.
+- `model.py` contains `GalacticModel`, the compatibility-facing wrapper that builds a density and prior from pre-run outputs or explicit histogram paths.
+- `density/histogram_numpy.py` contains the NumPy histogram density backend.
+  - `density/histogram.py` remains as a compatibility re-export for older imports.
+- `density/histogram_jax.py` contains `JaxHistogramDensity`, the JAX histogram density backend using the same event-local files and raw physical-parameter API.
+- `priors/galactic.py` and `priors/galactic_jax.py` compose density backends with event-rate and optional parameterization hooks.
+- `gapmoeJax.py` remains a legacy copy of the old hard-coded 0.2 degree grid model. New JAX work should happen in backend-specific modules such as `density/histogram_jax.py`.
 - `parametrics.py`, `parametrics2.py`, and `parametrics_old.py` contain transformations between microlensing light-curve parameters and physical parameters.
 - `EarthMotion.py`, `EarthMotion_tmp.py`, and `calc_vEarth.py` handle Earth velocity/motion support used by the parameter transformations.
 - `pre_runner.py` is the first wrapper around external Genulens `pre_gapmoe`.

@@ -290,11 +290,11 @@ Pragmatic recommendation:
 - Add `HistogramDensity.from_pre_run(pre_run_result)`.
 - Add tests with the small `/tmp/gapmoe_prerunner_smoke/small` outputs or a committed tiny fixture.
 
-### Step 3: Introduce PhysicalParams
+### Step 3: Use Raw Physical Values
 
-- Use a dataclass or lightweight mapping for physical parameters.
-- Make units explicit.
-- Make old method signatures call into the new object.
+- Public probability calls use raw `ML, DL, DS, mu_N, mu_E`.
+- Keep units explicit in docs and method names.
+- Do not add a lightweight parameter container unless it solves a real API problem.
 
 ### Step 4: Introduce Parameterization Classes
 
@@ -324,7 +324,6 @@ Top-level public names:
 - `HistogramDensity`
 - `FlowDensity`
 - `GalacticPrior`
-- `PhysicalParams`
 - `Parameterization`
 
 Potential compatibility wrapper:
@@ -336,7 +335,7 @@ Potential compatibility wrapper:
 ## Questions To Resolve
 
 - What should the canonical internal distance unit be: pc or kpc?
-- Should `mu_N/mu_E` or `mu/phi` be the canonical density input?
+- `mu_N/mu_E` are the canonical public density inputs. `mu/phi` are internal/legacy histogram coordinates.
 - Should the event-rate factor `Gamma` always be included, or should users opt into it?
 - Do normalizing flows model the same physical parameter set as histograms, or a transformed space such as log mass/log distance?
 - Should `PreRunner` always regenerate all three files, or cache/reuse mass tables when model options are unchanged?
@@ -356,10 +355,9 @@ Do the next implementation in this order:
 
 2026-05-02:
 
-- Added `src/gapmoe/physical.py` with `PhysicalParams`.
-  - Canonical distance unit is currently pc.
-  - Canonical proper-motion components are heliocentric `mu_N`, `mu_E` in mas/yr.
-  - `mu` and `phi` are derived properties.
+- Canonical distance unit is currently pc.
+- Canonical public proper-motion components are heliocentric `mu_N`, `mu_E` in mas/yr.
+- `mu` and `phi` are derived only inside the histogram lookup / legacy wrappers.
 - Added `src/gapmoe/priors/event_rate.py` with `log_event_rate`.
 - Added `src/gapmoe/density/base.py` with `DensityModel`.
 - Added `src/gapmoe/density/histogram.py` with:
@@ -368,7 +366,7 @@ Do the next implementation in this order:
   - `MurelHistogram`
   - `HistogramDensity`
 - `HistogramDensity` reads current `PreRunner` outputs: `mass.dat`, `rho.dat`, `murel.dat`.
-- Added public lazy exports for `PhysicalParams` and `HistogramDensity`.
+- Added public lazy export for `HistogramDensity`.
 - Parameterization code was intentionally not touched in this step.
 - Committed this density layer as `bb93116 Add histogram density model`.
 
@@ -380,7 +378,7 @@ Do the next implementation in this order:
   - optional event-rate factor;
   - optional parameterization hook;
   - optional extra user prior.
-- The implemented default path is intentionally conservative: without a parameterization, `log_prob(...)` accepts only `PhysicalParams`.
+- Without a parameterization, `log_prob(...)` accepts raw `ML, DL, DS, mu_N, mu_E`.
 - The parameterization interface is currently a thin protocol only. No concrete light-curve parameter transformations have been moved yet.
 - Added public lazy export for `GalacticPrior`.
 
@@ -401,8 +399,9 @@ Do the next implementation in this order:
 - Added `example/emcee_physical_params.ipynb`.
 - The notebook demonstrates the current canonical workflow:
   - run `PreRunner` for one sky position;
-  - build `GalacticModel` from the generated `mass.dat`, `rho.dat`, and `murel.dat`;
-  - evaluate `PhysicalParams(ML, DL, DS, mu_N, mu_E)`;
+  - build NumPy `HistogramDensity` from the generated `mass.dat`, `rho.dat`, and `murel.dat`;
+  - compose it with `GalacticPrior`;
+  - evaluate `prior.log_prob(ML, DL, DS, mu_N, mu_E)`;
   - sample those five physical parameters with `emcee`.
 - The notebook samples the Galactic prior itself. Real event likelihoods should be added inside its `log_probability` function.
 - Generated pre-run files go under `example/pre_runner_outputs/` and should not be treated as source files.
@@ -447,21 +446,53 @@ Smoke checks:
 
 - `py_compile` passed for new modules.
 - `HistogramDensity.from_paths(...)` loaded `/tmp/gapmoe_prerunner_smoke/small/{mass,rho,murel}.dat`.
-- For `PhysicalParams(ML=0.3, DL=250, DS=600, mu_N=5, mu_E=2)`, `HistogramDensity` returned finite `log_density` and `log_prior`.
-- `GalacticPrior(HistogramDensity).log_prob(PhysicalParams(...))` matches `HistogramDensity.log_prior(...)` exactly on `/tmp/gapmoe_prerunner_smoke/small_source_default`.
-- `GalacticModel.from_paths(...)` loads `/tmp/gapmoe_prerunner_smoke/small_source_default` and returns the same `log_galactic_prior` as `log_prob`.
+- For `ML=0.3, DL=250, DS=600, mu_N=5, mu_E=2`, `HistogramDensity` returned finite `log_density` and `log_prior`.
+- `GalacticPrior(HistogramDensity).log_prob(ML, DL, DS, mu_N, mu_E)` matches `HistogramDensity.log_prior(...)` exactly on `/tmp/gapmoe_prerunner_smoke/small_source_default`.
+- `GalacticModel.from_paths(...)` loads `/tmp/gapmoe_prerunner_smoke/small_source_default`; raw `log_prob(ML, DL, DS, mu_N, mu_E)` matches `GalacticPrior.log_prob(...)`, while legacy `log_galactic_prior(ML, DL, DS, mu, phi)` differs by the expected `+log(mu)` measure factor.
 - `from gapmoe.gapmoe import GalacticModel, gapmoe` remains import-compatible.
 - `example/emcee_physical_params.ipynb` passes JSON validation and all code cells compile.
 - On `example/pre_runner_outputs/emcee_demo/murel.dat` with 788400 rows and 10950 `(DS, DL)` blocks, load time was about 2.9 s and 1000 repeated `log_prob` evaluations took about 0.22 s.
+- Cached `DistanceDensityTable` normalizations at load time.
+  - `source_norm = integral rhoD_S_tot dD` is constant for a loaded `rho.dat`, so it should not be recomputed for every log-probability evaluation.
+  - `p(DL | DS)` still has a `DS`-dependent denominator, but the lens-density cumulative integral can be precomputed once and queried by interpolation.
+  - Numeric checks against the old per-call trapezoid integration matched at roundoff level.
+- Canonical public `log_prob` parameters are now `ML, DL, DS, mu_N, mu_E`.
+  - `murel.dat` is tabulated as a density in `dmu dphi`.
+  - `HistogramDensity.density(ML, DL, DS, mu_N, mu_E)` converts `mu_N, mu_E` to `mu, phi` and applies the Jacobian factor `1 / mu`, i.e. `log p(..., mu_N, mu_E) = log p(..., mu, phi) - log(mu)`.
+  - Legacy `mu, phi` helpers remain densities in `dmu dphi` and do not apply the component-measure correction.
+- Removed the `PhysicalParams` dataclass and `src/gapmoe/physical.py`.
+  - It was only a thin container and did not justify a public or internal type.
+  - `DensityModel`, `HistogramDensity`, `GalacticPrior`, and `GalacticModel` now use raw `ML, DL, DS, mu_N, mu_E` values directly.
+  - Parameterization hooks should return the same five raw values plus their own log-Jacobian.
+- Split histogram density backends by implementation backend.
+  - `src/gapmoe/density/histogram_numpy.py` contains the NumPy histogram implementation.
+  - `src/gapmoe/density/histogram.py` remains a compatibility re-export for existing imports.
+  - `src/gapmoe/density/histogram_jax.py` adds `JaxHistogramDensity`, using the same file semantics and raw physical-parameter API.
+  - `src/gapmoe/priors/galactic_jax.py` adds `JaxGalacticPrior`, so JAX density backends can be composed without falling back through Python `math`.
+  - `HistogramDensity` remains the public NumPy default; `JaxHistogramDensity` is exported lazily.
 - Captured default `PreRunner` commands without running C binaries and confirmed `rho` uses `16000 pc / 1 pc`, while `murel` uses `16000 pc / 250 pc`.
 - After the external murel fix, a single-point check at `(DL, DS)=(3750, 7750)` with `Nsimu=200000` returned mean `mu ~ 6.02`, median `mu ~ 5.75`, and mode `mu ~ 5.25`, consistent with the old histogram scale.
+- JAX backend smoke check:
+  - `JaxHistogramDensity.from_numpy(HistogramDensity)` matches NumPy `HistogramDensity.log_density(...)` on `/tmp/gapmoe_prerunner_smoke/small_source_default` within float32 tolerance.
+  - `JaxGalacticPrior(JaxHistogramDensity).log_prob(...)` matches NumPy `GalacticPrior(HistogramDensity).log_prob(...)` within float32 tolerance.
+  - `jax.jit(jax_density.log_density)` runs on the same representative point.
+- Added pytest coverage before committing the backend split.
+  - `tests/fixtures/small_source_default/` stores a small committed `mass.dat`, `rho.dat`, and `murel.dat` fixture generated by `PreRunner`.
+  - `tests/test_histogram_backends.py` checks public/compat imports, NumPy finite prior evaluation, the raw `mu_N/mu_E` Jacobian factor, NumPy/JAX log-density parity, JAX prior parity, and JIT execution.
+  - `tests/test_examples.py` checks that the emcee notebook is output-free, still uses the NumPy `HistogramDensity` plus `GalacticPrior` path, keeps `corner`, and has syntactically valid code cells.
+  - `pytest.ini` limits default pytest discovery to `tests/`, avoiding exploratory notebooks/scripts under `test_tool/`.
 
 Important caveats:
 
 - The current histogram interpretation is a first extraction from the legacy `gapmoe` behavior plus the new `pre_gapmoe` output format. It needs scientific validation.
 - `rho.dat` source density uses `rhoD_S_tot` for normal GAPMOE usage. Files without source-density columns are legacy/debug inputs and require an explicit opt-out.
 - Lens density uses `nMS[0..10]` by component.
-- `murel.dat` lookup uses distance-weighted neighboring `(DS, DL)` histogram blocks when bracketing blocks exist, with nearest-block fallback outside the tabulated grid.
+- `murel.dat` lookup uses the nearest `(DS, DL)` histogram block.
+- Murel interpolation policy:
+  - Interpolation within one histogram block over `mu` and `phi` bin centers is needed unless callers only evaluate exact bin centers.
+  - Interpolation across neighboring `(DS, DL)` blocks is not used by default because it is an extra modeling assumption on top of the Monte Carlo preproduct.
+  - Nearest-block lookup stays closer to the tabulated preproduct and old GAPMOE behavior.
+- The JAX histogram backend is intended for evaluation/composition parity first. Histogram nearest-block lookup and piecewise interpolation are not a smooth density model, so gradient-based samplers should be validated carefully; a future normalizing-flow backend is the better target for smooth gradients.
 - Normalizing-flow support is not implemented yet; the interface is only prepared for it.
 
 ## Density Validation Notes
@@ -484,7 +515,7 @@ Decision:
 - `PreRunner` passes `SOURCE=1` by default. If no source-selection options are supplied, this matches the `genulens.cpp` default fallback weighting with `gammaDs=0.5`.
 - Do not silently fall back to `nMS_tot` for normal `HistogramDensity` loading; old files without `rhoD_S` need an explicit debug/legacy opt-out.
 - Do not use `n[0..10]` / `n_tot` for the current histogram density because current mass and murel preproducts are main-sequence normalized.
-- Replace nearest-only murel block lookup with distance-weighted neighboring grid-block lookup plus nearest fallback.
+- Use nearest-block murel lookup for `(DS, DL)`. Keep only within-block interpolation over `mu` and `phi` bin centers.
 
 Clarification:
 
@@ -496,9 +527,14 @@ Clarification:
 Smoke checks:
 
 - Parsed `/tmp/gapmoe_prerunner_smoke/small/rho.dat`; first-row `nMS[0..10]` sum matches `nMS_tot`.
-- `PhysicalParams(ML=0.3, DL=260, DS=600, mu_N=5, mu_E=2)` returns finite density after the `nMS` mapping change.
-- For `DL=500`, `DS=1000`, weighted murel lookup differs from nearest lookup, confirming it is interpolating across neighboring blocks.
-- For exact grid-center input, weighted murel lookup equals nearest lookup.
+- `HistogramDensity.log_density(ML=0.3, DL=260, DS=600, mu_N=5, mu_E=2)` returns finite density after the `nMS` mapping change.
+- Murel distance lookup is nearest-block only; no cross-block `(DS, DL)` interpolation is applied.
+- Updated `example/emcee_physical_params.ipynb` for the canonical raw API:
+  - imports `HistogramDensity`, `GalacticPrior`, and `PreRunner`, not `PhysicalParams` or `GalacticModel`;
+  - builds the NumPy histogram backend explicitly with `HistogramDensity.from_pre_run(pre_run)`;
+  - calls `prior.log_prob(ML, DL, DS, mu_N, mu_E)` / `prior.log_prob(*theta)`;
+  - clears execution outputs for a lighter public example;
+  - keeps the `corner` plot cell.
 - Re-ran `PreRunner` without explicit source-selection options at `/tmp/gapmoe_prerunner_smoke/small_source_default`.
   - The manifest shows `calc_rho_profile ... SOURCE 1`.
   - The generated `rho.dat` has 37 columns, including `rhoD_S_tot`.
