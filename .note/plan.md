@@ -415,6 +415,19 @@ Do the next implementation in this order:
 - It also parses the `# Grid: DL ...` and `# Grid: DS ...` header metadata for inspection/debugging.
 - Density evaluation now looks only at the small murel/phi block for the relevant neighboring grid cells, instead of scanning the whole table.
 
+2026-05-02, PreRunner defaults:
+
+- Simplified the normal `PreRunner.run(...)` API expectation: most users should only provide sky coordinates and optional source-selection settings.
+- Added shared distance-grid defaults:
+  - `distance_max_pc=16000.0`
+  - `distance_step_pc=250.0`
+- By default, `rho.dat` and `murel.dat` now use the same distance support and spacing:
+  - `rho`: `Dmax=distance_max_pc`, `Dstep=distance_step_pc`
+  - `murel`: `DLmax=DSmax=distance_max_pc`, `DLstep=DSstep=distance_step_pc`
+- Separate `d_*`, `dl_*`, and `ds_*` options remain as advanced overrides, but should not be part of normal examples.
+- `AUTOERR` remains on by default; Genulens' default target relative error is used unless `err_target` is explicitly supplied.
+- `mass.dat` remains generated from the Genulens mass model defaults. Normal users should not need to tune mass-grid settings.
+
 Smoke checks:
 
 - `py_compile` passed for new modules.
@@ -425,6 +438,7 @@ Smoke checks:
 - `from gapmoe.gapmoe import GalacticModel, gapmoe` remains import-compatible.
 - `example/emcee_physical_params.ipynb` passes JSON validation and all code cells compile.
 - On `example/pre_runner_outputs/emcee_demo/murel.dat` with 788400 rows and 10950 `(DS, DL)` blocks, load time was about 2.9 s and 1000 repeated `log_prob` evaluations took about 0.22 s.
+- Captured default `PreRunner` commands without running C binaries and confirmed `rho` and `murel` use `16000 pc / 250 pc` shared distance settings.
 
 Important caveats:
 

@@ -121,15 +121,17 @@ class PreRunner:
         galactic_b: Optional[CoordinateValue] = None,
         source: Optional[SourceSelection] = None,
         run_name: Optional[str] = None,
+        distance_max_pc: float = 16000.0,
+        distance_step_pc: float = 250.0,
         d_min_pc: float = 100.0,
-        d_max_pc: float = 16000.0,
-        d_step_pc: float = 100.0,
+        d_max_pc: Optional[float] = None,
+        d_step_pc: Optional[float] = None,
         dl_min_pc: float = 0.0,
-        dl_max_pc: float = 12000.0,
-        dl_step_pc: float = 500.0,
+        dl_max_pc: Optional[float] = None,
+        dl_step_pc: Optional[float] = None,
         ds_min_pc: float = 0.0,
-        ds_max_pc: float = 16000.0,
-        ds_step_pc: float = 500.0,
+        ds_max_pc: Optional[float] = None,
+        ds_step_pc: Optional[float] = None,
         n_simu: int = 10_000_000,
         mu_max_masyr: float = 300.0,
         dmu_masyr: float = 0.5,
@@ -142,6 +144,12 @@ class PreRunner:
         model_options: Optional[Mapping[str, OptionValue]] = None,
     ) -> PreRunResult:
         """Run mass, rho, and murel preprocessing for one sky position.
+
+        The normal user-facing inputs are the sky coordinates and optional
+        source-selection settings. By default, rho and murel preprocessing use
+        the same distance support and spacing, controlled by `distance_max_pc`
+        and `distance_step_pc`. The separate d/DL/DS options are advanced
+        overrides.
 
         `calc_murel_dist` has no t0 or Earth-velocity option. Its output is the
         heliocentric relative proper-motion distribution from the Galactic
@@ -182,6 +190,13 @@ class PreRunner:
         if model_options:
             base_options.update(model_options)
 
+        rho_max_pc = distance_max_pc if d_max_pc is None else d_max_pc
+        rho_step_pc = distance_step_pc if d_step_pc is None else d_step_pc
+        murel_dl_max_pc = distance_max_pc if dl_max_pc is None else dl_max_pc
+        murel_dl_step_pc = distance_step_pc if dl_step_pc is None else dl_step_pc
+        murel_ds_max_pc = distance_max_pc if ds_max_pc is None else ds_max_pc
+        murel_ds_step_pc = distance_step_pc if ds_step_pc is None else ds_step_pc
+
         commands: Dict[str, Sequence[str]] = {}
 
         mass_cmd = self._command("calc_mass_dist", self._merge_options(base_options, mass_options))
@@ -192,8 +207,8 @@ class PreRunner:
             **base_options,
             "SOURCE": 1,
             "Dmin": d_min_pc,
-            "Dmax": d_max_pc,
-            "Dstep": d_step_pc,
+            "Dmax": rho_max_pc,
+            "Dstep": rho_step_pc,
         }
         if source is not None:
             rho_base.update(source.to_options())
@@ -205,11 +220,11 @@ class PreRunner:
             **base_options,
             "GRID": 1,
             "DLmin": dl_min_pc,
-            "DLmax": dl_max_pc,
-            "DLstep": dl_step_pc,
+            "DLmax": murel_dl_max_pc,
+            "DLstep": murel_dl_step_pc,
             "DSmin": ds_min_pc,
-            "DSmax": ds_max_pc,
-            "DSstep": ds_step_pc,
+            "DSmax": murel_ds_max_pc,
+            "DSstep": murel_ds_step_pc,
             "Nsimu": n_simu,
             "mumax": mu_max_masyr,
             "dmu": dmu_masyr,
