@@ -1,24 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional
 
 import jax.numpy as jnp
 
+from gapmoe.parameterizations.base import MappingContext, Parameterization
 from gapmoe.priors.event_rate_jax import jax_log_event_rate
 
 PhysicalValues = tuple[float, float, float, float, float]
-MappingContext = dict[str, Any]
 ExtraLogPrior = Callable[[float, float, float, float, float], jnp.ndarray]
-
-
-class JaxParameterization(Protocol):
-    """Map user/light-curve parameters into ML, DL, DS, mu_N, mu_E."""
-
-    def to_physical(self, theta: Any, context: Optional[MappingContext] = None) -> PhysicalValues:
-        ...
-
-    def log_abs_det_jacobian(self, theta: Any, context: Optional[MappingContext] = None) -> jnp.ndarray:
-        ...
 
 
 class JaxGalacticPrior:
@@ -31,7 +21,7 @@ class JaxGalacticPrior:
         self,
         density: Any,
         *,
-        parameterization: Optional[JaxParameterization] = None,
+        parameterization: Optional[Parameterization] = None,
         include_event_rate: bool = True,
         extra_log_prior: Optional[ExtraLogPrior] = None,
     ) -> None:

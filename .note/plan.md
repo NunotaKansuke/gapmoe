@@ -296,11 +296,17 @@ Pragmatic recommendation:
 - Keep units explicit in docs and method names.
 - Do not add a lightweight parameter container unless it solves a real API problem.
 
-### Step 4: Introduce Parameterization Classes
+### Step 4: Introduce Parameterization Classes (done 2026-05-03)
 
-- Move functions from `parametrics.py` into named classes or wrappers.
-- Keep pure functions available for backward compatibility.
-- Add `IdentityParameterization`.
+- Created `src/gapmoe/parameterizations/` package.
+- `parameterizations/base.py`: `Parameterization` Protocol (moved from `galactic.py`), `MappingContext` type alias.
+- `parameterizations/binary_lens.py`: `BinaryCircularParameterization`, `BinaryCircularUseThEParameterization`, `BinaryKeplerParameterization`.
+- `parameterizations/single_lens.py`: `SingleLensParameterization`, `SingleLensUseThEParameterization`.
+- Each class carries a `names` tuple documenting parameter ordering.
+- Context dict passes event-specific constants (`"thS"`, `"vEarth"`); `calc_vEarth` is re-exported from `parameterizations`.
+- JAX kernel functions are private module-level helpers (underscore prefix) inside each module.
+- Deleted `parametrics.py`, `parametrics2.py`, `parametrics_old.py`, `EarthMotion_tmp.py`.
+- `galactic.py` and `galactic_jax.py` now import `Parameterization` from `parameterizations.base`; `JaxParameterization` removed (same protocol covers both backends).
 
 ### Step 5: Introduce GalacticPrior
 

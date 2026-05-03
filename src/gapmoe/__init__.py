@@ -7,8 +7,21 @@ __all__ = [
     "JaxHistogramDensity",
     "GalacticPrior",
     "JaxGalacticPrior",
+    "BinaryCircularParameterization",
+    "BinaryCircularUseThEParameterization",
+    "BinaryKeplerParameterization",
+    "SingleLensParameterization",
+    "SingleLensUseThEParameterization",
     "gapmoe",
 ]
+
+_PARAMETERIZATIONS = {
+    "BinaryCircularParameterization",
+    "BinaryCircularUseThEParameterization",
+    "BinaryKeplerParameterization",
+    "SingleLensParameterization",
+    "SingleLensUseThEParameterization",
+}
 
 
 def __getattr__(name):
@@ -42,4 +55,8 @@ def __getattr__(name):
         from .priors import JaxGalacticPrior
 
         return JaxGalacticPrior
+    if name in _PARAMETERIZATIONS:
+        from . import parameterizations as _pm
+
+        return getattr(_pm, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

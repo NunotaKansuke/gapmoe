@@ -1,25 +1,13 @@
 from __future__ import annotations
 
 from math import hypot, isfinite
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional
 
 from gapmoe.density.base import DensityModel
+from gapmoe.parameterizations.base import MappingContext, Parameterization
 from gapmoe.priors.event_rate import log_event_rate
 
 PhysicalValues = tuple[float, float, float, float, float]
-
-
-class Parameterization(Protocol):
-    """Map user/light-curve parameters into ML, DL, DS, mu_N, mu_E."""
-
-    def to_physical(self, theta: Any, context: Optional[MappingContext] = None) -> PhysicalValues:
-        ...
-
-    def log_abs_det_jacobian(self, theta: Any, context: Optional[MappingContext] = None) -> float:
-        ...
-
-
-MappingContext = dict[str, Any]
 ExtraLogPrior = Callable[[float, float, float, float, float], float]
 
 
