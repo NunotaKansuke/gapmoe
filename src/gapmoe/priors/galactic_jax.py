@@ -22,7 +22,10 @@ class JaxParameterization(Protocol):
 
 
 class JaxGalacticPrior:
-    """JAX prior composition for density backends with a JAX log_density method."""
+    """JAX prior composition for density backends with a JAX log_density method.
+
+    Physical parameters use kpc for DL and DS.
+    """
 
     def __init__(
         self,

@@ -24,7 +24,10 @@ ExtraLogPrior = Callable[[float, float, float, float, float], float]
 
 
 class GalacticPrior:
-    """Compose a Galactic density model with event-rate and optional mappings."""
+    """Compose a Galactic density model with event-rate and optional mappings.
+
+    Physical parameters use kpc for DL and DS.
+    """
 
     def __init__(
         self,

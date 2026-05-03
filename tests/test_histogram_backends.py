@@ -12,7 +12,7 @@ from gapmoe.density.histogram_numpy import HistogramDensity as NumpyHistogramDen
 
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "small_source_default"
-POINT_MU_PHI = (0.3, 260.0, 600.0, 5.385164807134504, 0.3805063771123649)
+POINT_MU_PHI = (0.3, 0.26, 0.6, 5.385164807134504, 0.3805063771123649)
 
 
 @pytest.fixture(scope="module")

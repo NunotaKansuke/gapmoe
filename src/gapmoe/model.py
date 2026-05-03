@@ -110,7 +110,7 @@ class GalacticModel:
         norm = _trapz(vals, self.density.distance.distance_pc)
         if norm <= 0.0:
             return 0.0
-        return float(np.interp(DL_value, self.density.distance.distance_pc, vals, left=0.0, right=0.0) / norm)
+        return float(np.interp(DL_value * 1000.0, self.density.distance.distance_pc, vals, left=0.0, right=0.0) / norm)
 
     def get_density_DL_given_DS(self, DL_value: float, DS_value: float) -> float:
         return self.density.distance.lens_pdf_given_source(DL_value, DS_value)
@@ -208,13 +208,13 @@ class GalacticModel:
     def component_fractions(self, DL_value: float) -> dict[str, float]:
         return self.density.component_fractions(DL_value)
 
-    def _component_density(self, distance_pc: float, comp: str) -> float:
+    def _component_density(self, distance_kpc: float, comp: str) -> float:
         idx = self._component_index(comp)
         vals = self.density.distance.lens_density_by_component[:, idx]
         norm = _trapz(vals, self.density.distance.distance_pc)
         if norm <= 0.0:
             return 0.0
-        return float(np.interp(distance_pc, self.density.distance.distance_pc, vals, left=0.0, right=0.0) / norm)
+        return float(np.interp(distance_kpc * 1000.0, self.density.distance.distance_pc, vals, left=0.0, right=0.0) / norm)
 
     def _component_index(self, comp: str) -> int:
         if comp == "all":

@@ -94,17 +94,17 @@ Create a canonical physical-parameter representation shared by all density backe
 Candidate fields:
 
 - `ML`: lens mass, solar masses.
-- `DL`: lens distance, kpc or pc; unit must be made explicit.
-- `DS`: source distance, kpc or pc.
+- `DL`: lens distance, kpc.
+- `DS`: source distance, kpc.
 - `mu_N`: heliocentric relative proper motion north, mas/yr.
 - `mu_E`: heliocentric relative proper motion east, mas/yr.
 - Derived:
   - `mu = sqrt(mu_N^2 + mu_E^2)`.
   - `phi = atan2(mu_E, mu_N)`.
 
-Open issue:
+Decision:
 
-- Current histogram code mixes kpc-like calls (`DL <= 16` warning) with preprocessor outputs in pc. The refactor should choose one internal unit and convert at boundaries.
+- Canonical public unit for DL and DS is kpc. All Python-level APIs (HistogramDensity, GalacticPrior, GalacticModel, event_rate) accept and return kpc. PreRunner and the Genulens binaries continue to use pc internally; HistogramDensity converts pc→kpc at table-load boundaries when evaluating probabilities.
 
 ### Density Interface
 
@@ -335,7 +335,8 @@ Potential compatibility wrapper:
 ## Questions To Resolve
 
 - What should the canonical internal distance unit be: pc or kpc?
-- `mu_N/mu_E` are the canonical public density inputs. `mu/phi` are internal/legacy histogram coordinates.
+- `mu_N/mu_E` in mas/yr are the canonical public density inputs. `mu/phi` are internal/legacy histogram coordinates.
+- Canonical distance unit is kpc for all public Python APIs. PreRunner and Genulens binaries use pc; conversion happens inside HistogramDensity at evaluation time.
 - Should the event-rate factor `Gamma` always be included, or should users opt into it?
 - Do normalizing flows model the same physical parameter set as histograms, or a transformed space such as log mass/log distance?
 - Should `PreRunner` always regenerate all three files, or cache/reuse mass tables when model options are unchanged?
@@ -355,7 +356,6 @@ Do the next implementation in this order:
 
 2026-05-02:
 
-- Canonical distance unit is currently pc.
 - Canonical public proper-motion components are heliocentric `mu_N`, `mu_E` in mas/yr.
 - `mu` and `phi` are derived only inside the histogram lookup / legacy wrappers.
 - Added `src/gapmoe/priors/event_rate.py` with `log_event_rate`.
@@ -487,7 +487,7 @@ Important caveats:
 - The current histogram interpretation is a first extraction from the legacy `gapmoe` behavior plus the new `pre_gapmoe` output format. It needs scientific validation.
 - `rho.dat` source density uses `rhoD_S_tot` for normal GAPMOE usage. Files without source-density columns are legacy/debug inputs and require an explicit opt-out.
 - Lens density uses `nMS[0..10]` by component.
-- `murel.dat` lookup uses the nearest `(DS, DL)` histogram block.
+- `murel.dat` lookup uses the nearest `(DS, DL)` histogram block. Table data is stored in pc internally; all public API distances are in kpc.
 - Murel interpolation policy:
   - Interpolation within one histogram block over `mu` and `phi` bin centers is needed unless callers only evaluate exact bin centers.
   - Interpolation across neighboring `(DS, DL)` blocks is not used by default because it is an extra modeling assumption on top of the Monte Carlo preproduct.
