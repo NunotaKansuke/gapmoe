@@ -1,7 +1,7 @@
 # gapmoe
 
 gapmoe provides Galactic prior tools for microlensing event modeling. The
-current public API builds event-local histogram products with external Genulens
+current public API builds event-local histogram products with external genulens
 `pre_gapmoe` tools, loads those products in Python, and evaluates Galactic
 density/prior terms for physical microlensing parameters.
 
@@ -34,10 +34,10 @@ Optional extras:
 - `.[examples]`: notebook plotting/sampling dependencies.
 - `.[dev]`: JAX, examples, and pytest.
 
-## External Genulens Dependency
+## External genulens dependency
 
-gapmoe does not vendor Genulens. To generate histogram inputs, provide a local
-Genulens checkout containing `pre_gapmoe` with these executables:
+gapmoe does not vendor genulens. To generate histogram inputs, provide a local
+genulens checkout containing `pre_gapmoe` with these executables:
 
 - `calc_mass_dist`
 - `calc_rho_profile`
@@ -46,7 +46,7 @@ Genulens checkout containing `pre_gapmoe` with these executables:
 `PreRunner` resolves the checkout from `genulens_root=...`,
 `GAPMOE_GENULENS_ROOT`, `GENULENS_ROOT`, or nearby default candidates.
 
-Build Genulens separately before running `PreRunner`. For a sibling checkout,
+Build genulens separately before running `PreRunner`. For a sibling checkout,
 the usual shape is:
 
 ```bash
@@ -124,7 +124,7 @@ backend is the better target for smooth gradients.
 
 ## Source Selection
 
-Normal gapmoe usage assumes `rho.dat` was generated with Genulens source
+Normal gapmoe usage assumes `rho.dat` was generated with genulens source
 selection enabled. `PreRunner` passes `SOURCE=1` to `calc_rho_profile` by
 default. `HistogramDensity.from_paths(...)` requires source-density columns by
 default and uses `rhoD_S_tot` for the source-distance factor.
@@ -135,7 +135,7 @@ Current notebooks:
 
 - `example/pre_runner.ipynb`: generate event-local histogram files.
 - `example/emcee_physical_params.ipynb`: sample the physical-parameter Galactic
-  prior with `emcee` and compare with raw Genulens Monte Carlo output in the
+  prior with `emcee` and compare with raw genulens Monte Carlo output in the
   final corner plot.
 
 Generated pre-run files under `example/pre_runner_outputs/` are intentionally
@@ -148,7 +148,7 @@ pytest -q
 ```
 
 The test suite uses a small committed histogram fixture under
-`tests/fixtures/small_source_default/` and does not run external Genulens
+`tests/fixtures/small_source_default/` and does not run external genulens
 binaries.
 
 ## Legacy Modules

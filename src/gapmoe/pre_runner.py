@@ -21,7 +21,7 @@ OptionMap = Mapping[str, Union[OptionValue, OptionSequence]]
 class SourceSelection:
     """Source weighting and extinction options for calc_rho_profile.
 
-    PreRunner enables Genulens source weighting by default. If no explicit
+    PreRunner enables genulens source weighting by default. If no explicit
     selection options are supplied, calc_rho_profile uses the same fallback
     source weighting as genulens.cpp.
     """
@@ -87,7 +87,7 @@ class PreRunResult:
 
 @dataclass(frozen=True)
 class GenulensEnvironment:
-    """Resolved Genulens pre_gapmoe environment status."""
+    """Resolved genulens pre_gapmoe environment status."""
 
     genulens_root: Path
     pre_gapmoe_dir: Path
@@ -100,7 +100,7 @@ class GenulensEnvironment:
 
 
 class PreRunner:
-    """Run Genulens pre_gapmoe tools and write per-event gapmoe inputs."""
+    """Run genulens pre_gapmoe tools and write per-event gapmoe inputs."""
 
     required_tools = ("calc_rho_profile", "calc_mass_dist", "calc_murel_dist")
 
@@ -117,7 +117,7 @@ class PreRunner:
         self.auto_build = auto_build
 
     def check_environment(self) -> GenulensEnvironment:
-        """Return the resolved Genulens pre_gapmoe executable status."""
+        """Return the resolved genulens pre_gapmoe executable status."""
 
         available = []
         missing = []
@@ -180,7 +180,7 @@ class PreRunner:
         The normal user-facing inputs are the sky coordinates and optional
         source-selection settings. By default, rho and murel preprocessing use
         the same maximum distance. Rho uses a 1 pc distance step to preserve the
-        Genulens density precision; murel uses a coarser 250 pc distance grid.
+        genulens density precision; murel uses a coarser 250 pc distance grid.
         The separate d/DL/DS options are advanced overrides.
 
         `calc_murel_dist` has no t0 or Earth-velocity option. Its output is the
@@ -302,9 +302,9 @@ class PreRunner:
 
         checked = ", ".join(str(path.expanduser()) for path in candidates)
         raise FileNotFoundError(
-            "Could not find a Genulens checkout containing pre_gapmoe. "
+            "Could not find a genulens checkout containing pre_gapmoe. "
             "Pass genulens_root=... or set GAPMOE_GENULENS_ROOT. "
-            "The path may point either to the Genulens root or to pre_gapmoe itself. "
+            "The path may point either to the genulens root or to pre_gapmoe itself. "
             f"Checked: {checked}"
         )
 
