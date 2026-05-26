@@ -1,6 +1,6 @@
-# GAPMOE
+# gapmoe
 
-GAPMOE provides Galactic prior tools for microlensing event modeling. The
+gapmoe provides Galactic prior tools for microlensing event modeling. The
 current public API builds event-local histogram products with external Genulens
 `pre_gapmoe` tools, loads those products in Python, and evaluates Galactic
 density/prior terms for physical microlensing parameters.
@@ -36,7 +36,7 @@ Optional extras:
 
 ## External Genulens Dependency
 
-GAPMOE does not vendor Genulens. To generate histogram inputs, provide a local
+gapmoe does not vendor Genulens. To generate histogram inputs, provide a local
 Genulens checkout containing `pre_gapmoe` with these executables:
 
 - `calc_mass_dist`
@@ -55,7 +55,7 @@ make -C ../genulens/pre_gapmoe
 export GAPMOE_GENULENS_ROOT="$(realpath ../genulens)"
 ```
 
-Check what GAPMOE sees:
+Check what gapmoe sees:
 
 ```python
 from gapmoe import PreRunner
@@ -67,7 +67,7 @@ print(env.missing_tools)
 ```
 
 If `env.ok` is false, build `pre_gapmoe` or point `genulens_root` at the right
-checkout. GAPMOE can also try `make` automatically with `PreRunner(...,
+checkout. gapmoe can also try `make` automatically with `PreRunner(...,
 auto_build=True)`.
 
 ## Minimal Usage
@@ -124,7 +124,7 @@ backend is the better target for smooth gradients.
 
 ## Source Selection
 
-Normal GAPMOE usage assumes `rho.dat` was generated with Genulens source
+Normal gapmoe usage assumes `rho.dat` was generated with Genulens source
 selection enabled. `PreRunner` passes `SOURCE=1` to `calc_rho_profile` by
 default. `HistogramDensity.from_paths(...)` requires source-density columns by
 default and uses `rhoD_S_tot` for the source-distance factor.

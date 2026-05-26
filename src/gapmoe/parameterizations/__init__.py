@@ -1,4 +1,4 @@
-"""Light-curve-to-physical parameter mappings for GAPMOE.
+"""Light-curve-to-physical parameter mappings for gapmoe.
 
 Each parameterization converts a light-curve parameter vector *theta* into the
 five physical parameters ``(ML, DL, DS, mu_N, mu_E)`` expected by the Galactic

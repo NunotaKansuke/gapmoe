@@ -100,7 +100,7 @@ class GenulensEnvironment:
 
 
 class PreRunner:
-    """Run Genulens pre_gapmoe tools and write per-event GAPMOE inputs."""
+    """Run Genulens pre_gapmoe tools and write per-event gapmoe inputs."""
 
     required_tools = ("calc_rho_profile", "calc_mass_dist", "calc_murel_dist")
 
