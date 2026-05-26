@@ -50,7 +50,7 @@ Build Genulens separately before running `PreRunner`. For a sibling checkout,
 the usual shape is:
 
 ```bash
-git clone <genulens-url> ../genulens
+git clone https://github.com/nkoshimoto/genulens.git ../genulens
 make -C ../genulens/pre_gapmoe
 export GAPMOE_GENULENS_ROOT="$(realpath ../genulens)"
 ```
@@ -117,10 +117,10 @@ jax_density = JaxHistogramDensity.from_numpy(np_density)
 jax_prior = JaxGalacticPrior(jax_density)
 ```
 
-Histogram lookup is piecewise and uses nearest `(DS, DL)` murel blocks, so it is
-not intended as a smooth density model. For gradient-heavy workflows, validate
-the behavior carefully; a future normalizing-flow backend is the better target
-for smooth gradients.
+The JAX backend is currently intended for batched evaluation workflows such as
+`jax.vmap`. Histogram lookup is piecewise and uses nearest `(DS, DL)` murel
+blocks, so differentiability has not been validated. A future normalizing-flow
+backend is the better target for smooth gradients.
 
 ## Source Selection
 
