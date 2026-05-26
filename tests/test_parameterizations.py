@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from math import isfinite
-
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from gapmoe.parameterizations import (
@@ -14,6 +14,7 @@ from gapmoe.parameterizations import (
     calc_vEarth,
 )
 from gapmoe import BinaryCircularParameterization as _top_level_import
+from gapmoe import JaxGalacticPrior
 
 
 # Representative context: values at event peak
@@ -130,11 +131,11 @@ def test_single_lens_use_thE_names():
     (SingleLensParameterization, _THETA_SINGLE, _CTX),
     (SingleLensUseThEParameterization, _THETA_SINGLE_THE, _CTX),
 ])
-def test_to_physical_returns_five_floats(cls, theta, ctx):
+def test_to_physical_returns_five_finite_scalars(cls, theta, ctx):
     p = cls()
     result = p.to_physical(theta, ctx)
     assert len(result) == 5
-    assert all(isinstance(v, float) for v in result)
+    assert all(np.isfinite(float(v)) for v in result)
 
 
 @pytest.mark.parametrize("cls,theta,ctx", [
@@ -147,8 +148,7 @@ def test_to_physical_returns_five_floats(cls, theta, ctx):
 def test_jacobian_is_finite(cls, theta, ctx):
     p = cls()
     lndet = p.log_abs_det_jacobian(theta, ctx)
-    assert isinstance(lndet, float)
-    assert isfinite(lndet)
+    assert np.isfinite(float(lndet))
 
 
 def test_missing_vEarth_raises():
@@ -181,5 +181,25 @@ def test_single_lens_ds_is_in_theta():
 
 def test_calc_vEarth_returns_tuple():
     v_N, v_E = calc_vEarth(2460000.0, 270.0, -30.0)
-    assert isfinite(v_N)
-    assert isfinite(v_E)
+    assert np.isfinite(v_N)
+    assert np.isfinite(v_E)
+
+
+class _DummyJaxDensity:
+    def log_density(self, ML, DL, DS, mu_N, mu_E):
+        return -(ML + DL + DS + 0.01 * jnp.hypot(mu_N, mu_E))
+
+
+def test_jax_prior_with_binary_parameterization_is_jittable():
+    prior = JaxGalacticPrior(
+        _DummyJaxDensity(),
+        parameterization=BinaryCircularParameterization(),
+        include_event_rate=False,
+    )
+
+    @jax.jit
+    def lp(theta):
+        return prior.log_prob(theta, context=_CTX)
+
+    value = lp(_THETA_CIRC)
+    assert np.isfinite(float(value))

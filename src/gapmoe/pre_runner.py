@@ -85,6 +85,20 @@ class PreRunResult:
     commands: Dict[str, Sequence[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class GenulensEnvironment:
+    """Resolved Genulens pre_gapmoe environment status."""
+
+    genulens_root: Path
+    pre_gapmoe_dir: Path
+    available_tools: Tuple[str, ...]
+    missing_tools: Tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing_tools
+
+
 class PreRunner:
     """Run Genulens pre_gapmoe tools and write per-event GAPMOE inputs."""
 
@@ -101,6 +115,23 @@ class PreRunner:
         self.pre_gapmoe_dir = self.genulens_root / "pre_gapmoe"
         self.output_dir = Path(output_dir).expanduser().resolve()
         self.auto_build = auto_build
+
+    def check_environment(self) -> GenulensEnvironment:
+        """Return the resolved Genulens pre_gapmoe executable status."""
+
+        available = []
+        missing = []
+        for tool in self.required_tools:
+            if (self.pre_gapmoe_dir / tool).is_file():
+                available.append(tool)
+            else:
+                missing.append(tool)
+        return GenulensEnvironment(
+            genulens_root=self.genulens_root,
+            pre_gapmoe_dir=self.pre_gapmoe_dir,
+            available_tools=tuple(available),
+            missing_tools=tuple(missing),
+        )
 
     def run(
         self,
@@ -280,10 +311,10 @@ class PreRunner:
     def _prepare(self) -> None:
         if not self.pre_gapmoe_dir.is_dir():
             raise FileNotFoundError(f"pre_gapmoe directory not found: {self.pre_gapmoe_dir}")
-        missing = [tool for tool in self.required_tools if not (self.pre_gapmoe_dir / tool).is_file()]
+        missing = list(self.check_environment().missing_tools)
         if missing and self.auto_build:
             subprocess.run(["make", "-C", str(self.pre_gapmoe_dir)], cwd=self.genulens_root, check=True)
-            missing = [tool for tool in self.required_tools if not (self.pre_gapmoe_dir / tool).is_file()]
+            missing = list(self.check_environment().missing_tools)
         if missing:
             names = ", ".join(missing)
             raise FileNotFoundError(f"Missing pre_gapmoe executable(s): {names}. Build {self.pre_gapmoe_dir} first.")

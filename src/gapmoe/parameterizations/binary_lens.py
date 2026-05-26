@@ -259,11 +259,11 @@ _PHYS_IDX_BINARY = (3, 4, 5, 6, 7)
 
 def _phys_from_binary_out(out):
     return (
-        float(out[3]),  # ML  [Msun]
-        float(out[4]),  # DL  [kpc]
-        float(out[5]),  # DS  [kpc]
-        float(out[6]),  # mu_N [mas/yr]
-        float(out[7]),  # mu_E [mas/yr]
+        out[3],  # ML  [Msun]
+        out[4],  # DL  [kpc]
+        out[5],  # DS  [kpc]
+        out[6],  # mu_N [mas/yr]
+        out[7],  # mu_E [mas/yr]
     )
 
 
@@ -307,7 +307,7 @@ class BinaryCircularParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
+    ):
         out = _lc_to_phys_circular(theta, _thS(context), _vEarth(context))
         return _phys_from_binary_out(out)
 
@@ -315,8 +315,8 @@ class BinaryCircularParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
-        return float(_jacobian_circular(theta, _thS(context), _vEarth(context)))
+    ):
+        return _jacobian_circular(theta, _thS(context), _vEarth(context))
 
 
 class BinaryCircularUseThEParameterization:
@@ -341,7 +341,7 @@ class BinaryCircularUseThEParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
+    ):
         out = _lc_to_phys_circular_use_thE(theta, _vEarth(context))
         return _phys_from_binary_out(out)
 
@@ -349,8 +349,8 @@ class BinaryCircularUseThEParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
-        return float(_jacobian_circular_use_thE(theta, _vEarth(context)))
+    ):
+        return _jacobian_circular_use_thE(theta, _vEarth(context))
 
 
 class BinaryKeplerParameterization:
@@ -373,7 +373,7 @@ class BinaryKeplerParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
+    ):
         out = _lc_to_phys_kepler(theta, _thS(context), _vEarth(context))
         return _phys_from_binary_out(out)
 
@@ -381,5 +381,5 @@ class BinaryKeplerParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
-        return float(_jacobian_kepler(theta, _thS(context), _vEarth(context)))
+    ):
+        return _jacobian_kepler(theta, _thS(context), _vEarth(context))

@@ -50,14 +50,18 @@ class Parameterization(Protocol):
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
-        """Return ``(ML [Msun], DL [kpc], DS [kpc], mu_N [mas/yr], mu_E [mas/yr])``."""
+    ):
+        """Return ``(ML [Msun], DL [kpc], DS [kpc], mu_N [mas/yr], mu_E [mas/yr])``.
+
+        Implementations may return Python scalars for eager NumPy use or JAX
+        scalar arrays/tracers when called under ``jax.jit``.
+        """
         ...
 
     def log_abs_det_jacobian(
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
+    ):
         """Return ``log |det J|`` of the full parameter transformation."""
         ...

@@ -122,11 +122,11 @@ def _jacobian_single_use_thE(theta, vEarth):
 
 def _phys_from_single_out(out):
     return (
-        float(out[2]),  # ML  [Msun]
-        float(out[3]),  # DL  [kpc]
-        float(out[4]),  # DS  [kpc]
-        float(out[5]),  # mu_N [mas/yr]
-        float(out[6]),  # mu_E [mas/yr]
+        out[2],  # ML  [Msun]
+        out[3],  # DL  [kpc]
+        out[4],  # DS  [kpc]
+        out[5],  # mu_N [mas/yr]
+        out[6],  # mu_E [mas/yr]
     )
 
 
@@ -169,7 +169,7 @@ class SingleLensParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
+    ):
         out = _lc_to_phys_single(theta, _thS(context), _vEarth(context))
         return _phys_from_single_out(out)
 
@@ -177,8 +177,8 @@ class SingleLensParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
-        return float(_jacobian_single(theta, _thS(context), _vEarth(context)))
+    ):
+        return _jacobian_single(theta, _thS(context), _vEarth(context))
 
 
 class SingleLensUseThEParameterization:
@@ -202,7 +202,7 @@ class SingleLensUseThEParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> tuple[float, float, float, float, float]:
+    ):
         out = _lc_to_phys_single_use_thE(theta, _vEarth(context))
         return _phys_from_single_out(out)
 
@@ -210,5 +210,5 @@ class SingleLensUseThEParameterization:
         self,
         theta: Any,
         context: Optional[MappingContext] = None,
-    ) -> float:
-        return float(_jacobian_single_use_thE(theta, _vEarth(context)))
+    ):
+        return _jacobian_single_use_thE(theta, _vEarth(context))

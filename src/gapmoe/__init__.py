@@ -1,5 +1,6 @@
 __all__ = [
     "GalacticModel",
+    "GenulensEnvironment",
     "PreRunner",
     "PreRunResult",
     "SourceSelection",
@@ -30,10 +31,11 @@ def __getattr__(name):
 
         exports = {"GalacticModel": GalacticModel, "gapmoe": gapmoe}
         return exports[name]
-    if name in {"PreRunner", "PreRunResult", "SourceSelection"}:
-        from .pre_runner import PreRunner, PreRunResult, SourceSelection
+    if name in {"GenulensEnvironment", "PreRunner", "PreRunResult", "SourceSelection"}:
+        from .pre_runner import GenulensEnvironment, PreRunner, PreRunResult, SourceSelection
 
         exports = {
+            "GenulensEnvironment": GenulensEnvironment,
             "PreRunner": PreRunner,
             "PreRunResult": PreRunResult,
             "SourceSelection": SourceSelection,

@@ -13,8 +13,10 @@ Date: 2026-05-02
 - Main Python code lives under `src/gapmoe/`.
 - The bundled old Genulens C preprocessing copy under `src/genulens/` has been removed from the working tree.
 - Exploratory scripts and notebooks live under `test_tool/`.
-- Public-facing examples live under `example/`; `example/emcee_physical_params.ipynb` currently demonstrates the NumPy histogram backend by building `HistogramDensity` and `GalacticPrior` explicitly before sampling with `emcee` and `corner`.
-- Automated tests live under `tests/`; `pytest.ini` restricts default discovery there, and `tests/fixtures/small_source_default/` contains a small committed histogram fixture for NumPy/JAX backend parity checks.
+- Public-facing examples live under `example/`. Current notebook examples are `pre_runner.ipynb` and `emcee_physical_params.ipynb`; the latter demonstrates the NumPy histogram backend by building `HistogramDensity` and `GalacticPrior` explicitly before sampling with `emcee` and `corner`. Its final corner plot overlays weighted raw Genulens samples from `example/genulens_out.dat`.
+- Automated tests live under `tests/`; pytest discovery is restricted there, and `tests/fixtures/small_source_default/` contains a small committed histogram fixture for NumPy/JAX backend parity checks.
+- Public packaging files now live at the repository root: `pyproject.toml`, `README.md`, and `LICENSE`. Pytest discovery is configured in `pyproject.toml`.
+- CI configuration lives in `.github/workflows/tests.yml` and runs the pytest suite after installing the `dev` extra.
 - Runtime histogram data is expected at absolute paths under `/moao38_7/nunota/gapmoe/`, but those data directories are not present in this checkout.
 - Initial git commit exists: `6d4d8dd Initial GAPMOE baseline`.
 - `src/gapmoe/pre_runner.py` has been added but is not committed yet.
@@ -31,6 +33,7 @@ Date: 2026-05-02
 - `priors/galactic.py` and `priors/galactic_jax.py` compose density backends with event-rate and optional parameterization hooks.
 - `gapmoeJax.py` remains a legacy copy of the old hard-coded 0.2 degree grid model. New JAX work should happen in backend-specific modules such as `density/histogram_jax.py`.
 - `parametrics.py`, `parametrics2.py`, and `parametrics_old.py` contain transformations between microlensing light-curve parameters and physical parameters.
+- `parameterizations/` contains the newer swappable light-curve-to-physical mappings. The built-in JAX-backed mappings must not coerce outputs or Jacobians through Python `float(...)`, because they are intended to work under `jax.jit`.
 - `EarthMotion.py`, `EarthMotion_tmp.py`, and `calc_vEarth.py` handle Earth velocity/motion support used by the parameter transformations.
 - `pre_runner.py` is the first wrapper around external Genulens `pre_gapmoe`.
   - It accepts RA/Dec and converts to galactic `(l, b)` without snapping to the existing 0.2 degree histogram grid.
@@ -73,10 +76,10 @@ Date: 2026-05-02
 - Duplicate aliases are allowed only when they resolve to the same numeric value, e.g. `ra_deg=270.0` and `ra="18:00:00"`.
 - Conflicting aliases, mixed coordinate systems, and incomplete coordinate pairs raise `ValueError`.
 
-Important public-readiness issue:
+Public-readiness notes:
 
-- `gapmoe.py` and `gapmoeJax.py` hard-code `/moao38_7/nunota/gapmoe` data paths. Public usage needs configurable data roots.
-- There is no package metadata yet (`pyproject.toml`, install requirements, README usage path, etc.).
+- New public usage should avoid the legacy `gapmoe.py` and `gapmoeJax.py` hard-coded 0.2 degree grid paths. Use `PreRunner` plus event-local histogram outputs instead.
+- Initial package metadata and README now exist. They still need project-specific polish before a tagged release.
 
 ## Existing local histogram paths
 
