@@ -1,8 +1,8 @@
 # gapmoe
 
 gapmoe provides Galactic prior tools for microlensing event modeling. The
-current public API builds event-local histogram products with external genulens
-`pre_gapmoe` tools, loads those products in Python, and evaluates Galactic
+current public API builds event-local histogram products with the `genulens`
+`pre_gapmoe` Python API, loads those products in Python, and evaluates Galactic
 density/prior terms for physical microlensing parameters.
 
 The canonical public parameter order is:
@@ -15,6 +15,12 @@ where `ML` is in solar masses, `DL` and `DS` are in kpc, and proper motions are
 in mas/yr.
 
 ## Install
+
+From PyPI:
+
+```bash
+pip install gapmoe
+```
 
 For local development:
 
@@ -34,41 +40,40 @@ Optional extras:
 - `.[examples]`: notebook plotting/sampling dependencies.
 - `.[dev]`: JAX, examples, and pytest.
 
-## External genulens dependency
+## genulens Dependency
 
-gapmoe does not vendor genulens. To generate histogram inputs, provide a local
-genulens checkout containing `pre_gapmoe` with these executables:
+gapmoe depends on `genulens>=2.0.0a3`. A normal `pip install gapmoe` installs
+`genulens`, including the bundled `pre_gapmoe` helper executables used by
+`genulens.pre_gapmoe`.
 
-- `calc_mass_dist`
-- `calc_rho_profile`
-- `calc_murel_dist`
-
-`PreRunner` resolves the checkout from `genulens_root=...`,
-`GAPMOE_GENULENS_ROOT`, `GENULENS_ROOT`, or nearby default candidates.
-
-Build genulens separately before running `PreRunner`. For a sibling checkout,
-the usual shape is:
-
-```bash
-git clone https://github.com/nkoshimoto/genulens.git ../genulens
-make -C ../genulens/pre_gapmoe
-export GAPMOE_GENULENS_ROOT="$(realpath ../genulens)"
-```
-
-Check what gapmoe sees:
+Check what backend `PreRunner` will use:
 
 ```python
 from gapmoe import PreRunner
 
-env = PreRunner(genulens_root="../genulens").check_environment()
+runner = PreRunner()
+env = runner.check_environment()
+print(runner.backend)
 print(env.ok)
-print(env.pre_gapmoe_dir)
-print(env.missing_tools)
+print(env.backend)
 ```
 
-If `env.ok` is false, build `pre_gapmoe` or point `genulens_root` at the right
-checkout. gapmoe can also try `make` automatically with `PreRunner(...,
-auto_build=True)`.
+By default, `PreRunner(backend="auto")` uses the installed `genulens.pre_gapmoe`
+Python API. For development against a source checkout, pass `backend="cli"` or
+`genulens_root=...` to run the local CLI helpers instead:
+
+```bash
+git clone https://github.com/nkoshimoto/genulens.git ../genulens
+make -C ../genulens/pre_gapmoe
+```
+
+```python
+runner = PreRunner(genulens_root="../genulens")
+```
+
+The CLI backend resolves a checkout from `genulens_root=...`,
+`GAPMOE_GENULENS_ROOT`, `GENULENS_ROOT`, or nearby default candidates. It can
+also try `make` automatically with `PreRunner(..., auto_build=True)`.
 
 ## Minimal Usage
 
@@ -76,7 +81,6 @@ auto_build=True)`.
 from gapmoe import GalacticPrior, HistogramDensity, PreRunner
 
 runner = PreRunner(
-    genulens_root="../genulens",
     output_dir="example/pre_runner_outputs",
 )
 
@@ -148,8 +152,8 @@ pytest -q
 ```
 
 The test suite uses a small committed histogram fixture under
-`tests/fixtures/small_source_default/` and does not run external genulens
-binaries.
+`tests/fixtures/small_source_default/` and mocks the `genulens.pre_gapmoe`
+integration path.
 
 ## Legacy Modules
 
