@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from astropy.coordinates import Angle, SkyCoord
 import astropy.units as u
@@ -93,6 +94,7 @@ class GenulensEnvironment:
     pre_gapmoe_dir: Path
     available_tools: Tuple[str, ...]
     missing_tools: Tuple[str, ...]
+    backend: str = "cli"
 
     @property
     def ok(self) -> bool:
@@ -110,15 +112,36 @@ class PreRunner:
         output_dir: str | Path = ".",
         *,
         auto_build: bool = False,
+        backend: Literal["auto", "python", "cli"] = "auto",
     ) -> None:
-        self.genulens_root = self._resolve_genulens_root(genulens_root)
-        self.pre_gapmoe_dir = self.genulens_root / "pre_gapmoe"
+        if backend not in {"auto", "python", "cli"}:
+            raise ValueError("backend must be 'auto', 'python', or 'cli'")
+        self.backend = self._resolve_backend(backend, genulens_root)
+        self.genulens_root = self._resolve_genulens_root(genulens_root) if self.backend == "cli" else None
+        self.pre_gapmoe_dir = self.genulens_root / "pre_gapmoe" if self.genulens_root is not None else None
         self.output_dir = Path(output_dir).expanduser().resolve()
         self.auto_build = auto_build
 
     def check_environment(self) -> GenulensEnvironment:
         """Return the resolved genulens pre_gapmoe executable status."""
 
+        if self.backend == "python":
+            pre_gapmoe = self._require_python_api()
+            module_path = Path(getattr(importlib.import_module("genulens"), "__file__", ".")).resolve()
+            available = [
+                name for name in self.required_tools if hasattr(pre_gapmoe, self._python_api_name(name))
+            ]
+            missing = [name for name in self.required_tools if name not in available]
+            return GenulensEnvironment(
+                genulens_root=module_path,
+                pre_gapmoe_dir=module_path.parent,
+                available_tools=tuple(available),
+                missing_tools=tuple(missing),
+                backend="python",
+            )
+
+        assert self.pre_gapmoe_dir is not None
+        assert self.genulens_root is not None
         available = []
         missing = []
         for tool in self.required_tools:
@@ -131,6 +154,7 @@ class PreRunner:
             pre_gapmoe_dir=self.pre_gapmoe_dir,
             available_tools=tuple(available),
             missing_tools=tuple(missing),
+            backend="cli",
         )
 
     def run(
@@ -231,8 +255,8 @@ class PreRunner:
 
         commands: Dict[str, Sequence[str]] = {}
 
-        mass_cmd = self._command("calc_mass_dist", self._merge_options(base_options, mass_options))
-        self._run_to_file(mass_cmd, mass_path)
+        mass_options_merged = self._merge_options(base_options, mass_options)
+        mass_cmd = self._run_tool("calc_mass_dist", mass_options_merged, mass_path)
         commands["mass"] = mass_cmd
 
         rho_base: Dict[str, Union[OptionValue, OptionSequence]] = {
@@ -244,8 +268,8 @@ class PreRunner:
         }
         if source is not None:
             rho_base.update(source.to_options())
-        rho_cmd = self._command("calc_rho_profile", self._merge_options(rho_base, rho_options))
-        self._run_to_file(rho_cmd, rho_path)
+        rho_options_merged = self._merge_options(rho_base, rho_options)
+        rho_cmd = self._run_tool("calc_rho_profile", rho_options_merged, rho_path)
         commands["rho"] = rho_cmd
 
         murel_base: Dict[str, OptionValue] = {
@@ -264,8 +288,8 @@ class PreRunner:
         }
         if err_target is not None:
             murel_base["ERR_TARGET"] = err_target
-        murel_cmd = self._command("calc_murel_dist", self._merge_options(murel_base, murel_options))
-        self._run_to_file(murel_cmd, murel_path)
+        murel_options_merged = self._merge_options(murel_base, murel_options)
+        murel_cmd = self._run_tool("calc_murel_dist", murel_options_merged, murel_path)
         commands["murel"] = murel_cmd
 
         result = PreRunResult(
@@ -308,7 +332,24 @@ class PreRunner:
             f"Checked: {checked}"
         )
 
+    @classmethod
+    def _resolve_backend(cls, backend: str, genulens_root: Optional[Union[str, Path]]) -> str:
+        if backend != "auto":
+            return backend
+        if genulens_root is not None:
+            return "cli"
+        return "python" if cls._python_api_available() else "cli"
+
     def _prepare(self) -> None:
+        if self.backend == "python":
+            missing = list(self.check_environment().missing_tools)
+            if missing:
+                names = ", ".join(missing)
+                raise RuntimeError(f"Missing genulens.pre_gapmoe API function(s): {names}.")
+            return
+
+        assert self.pre_gapmoe_dir is not None
+        assert self.genulens_root is not None
         if not self.pre_gapmoe_dir.is_dir():
             raise FileNotFoundError(f"pre_gapmoe directory not found: {self.pre_gapmoe_dir}")
         missing = list(self.check_environment().missing_tools)
@@ -442,6 +483,23 @@ class PreRunner:
                 cmd.extend(str(item) for item in value)
         return cmd
 
+    def _run_tool(
+        self,
+        tool: str,
+        options: Mapping[str, Optional[Union[OptionValue, OptionSequence]]],
+        output_path: Path,
+    ) -> Sequence[str]:
+        cmd = self._command(tool, options)
+        if self.backend == "python":
+            pre_gapmoe = self._require_python_api()
+            function = getattr(pre_gapmoe, self._python_api_name(tool))
+            kwargs = {key: value for key, value in options.items() if value is not None}
+            table = function(**kwargs)
+            output_path.write_text(table.stdout)
+        else:
+            self._run_to_file(cmd, output_path)
+        return cmd
+
     @staticmethod
     def _merge_options(
         base: OptionMap,
@@ -453,6 +511,7 @@ class PreRunner:
         return merged
 
     def _run_to_file(self, cmd: Sequence[str], output_path: Path) -> None:
+        assert self.genulens_root is not None
         with output_path.open("w") as stdout:
             subprocess.run(cmd, cwd=self.genulens_root, stdout=stdout, check=True)
 
@@ -470,3 +529,30 @@ class PreRunner:
             "commands": result.commands,
         }
         result.manifest_path.write_text(json.dumps(payload, indent=2) + "\n")
+
+    @staticmethod
+    def _python_api_name(tool: str) -> str:
+        names = {
+            "calc_mass_dist": "mass_distribution",
+            "calc_rho_profile": "rho_profile",
+            "calc_murel_dist": "murel_distribution",
+        }
+        return names[tool]
+
+    @classmethod
+    def _python_api_available(cls) -> bool:
+        try:
+            pre_gapmoe = importlib.import_module("genulens").pre_gapmoe
+        except Exception:
+            return False
+        return all(hasattr(pre_gapmoe, cls._python_api_name(tool)) for tool in cls.required_tools)
+
+    @staticmethod
+    def _require_python_api() -> Any:
+        try:
+            return importlib.import_module("genulens").pre_gapmoe
+        except Exception as exc:
+            raise RuntimeError(
+                "genulens.pre_gapmoe is not available. Install a genulens wheel with the pre_gapmoe Python API "
+                "or use backend='cli' with a local genulens checkout."
+            ) from exc

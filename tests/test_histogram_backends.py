@@ -75,3 +75,23 @@ def test_jax_histogram_matches_numpy(histogram_density: HistogramDensity) -> Non
     assert jax_log_prob == pytest.approx(numpy_log_prob, rel=1e-5, abs=1e-5)
     assert jit_log_density == pytest.approx(numpy_log_density, rel=1e-5, abs=1e-5)
     assert jit_log_prob == pytest.approx(numpy_log_prob, rel=1e-5, abs=1e-5)
+
+
+def test_jax_histogram_bilinear_murel_is_finite_and_differentiable(histogram_density: HistogramDensity) -> None:
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from gapmoe import JaxHistogramDensity
+
+    _, _, _, mu_n, mu_e = raw_point()
+    jax_density = JaxHistogramDensity.from_numpy(histogram_density, murel_interpolation="bilinear")
+
+    def log_prob(theta):
+        p_mu, p_phi = jax_density.murel.densities(theta[0], theta[1], theta[2], theta[3])
+        return jnp.log(p_mu * p_phi)
+
+    theta = jnp.asarray([0.5, 0.9, jnp.hypot(mu_n, mu_e), jnp.arctan2(mu_e, mu_n)])
+    value = jax.jit(log_prob)(theta)
+    grad = jax.jit(jax.grad(log_prob))(theta)
+
+    assert jnp.isfinite(value)
+    assert jnp.all(jnp.isfinite(grad))

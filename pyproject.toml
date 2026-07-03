@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
   "astropy",
+  "genulens>=2.0.0a3",
   "numpy",
 ]
 

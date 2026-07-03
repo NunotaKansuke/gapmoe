@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import pi
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
 import jax.numpy as jnp
 import numpy as np
@@ -107,10 +107,22 @@ class JaxMurelHistogram:
     phi_x: jnp.ndarray
     phi_y: jnp.ndarray
     phi_len: jnp.ndarray
+    ds_values: jnp.ndarray
+    dl_values: jnp.ndarray
+    grid_index: jnp.ndarray
+    interpolation: str
     grid: dict[str, float]
 
     @classmethod
-    def from_numpy(cls, density: HistogramDensity) -> "JaxMurelHistogram":
+    def from_numpy(
+        cls,
+        density: HistogramDensity,
+        *,
+        interpolation: Literal["nearest", "bilinear"] = "nearest",
+    ) -> "JaxMurelHistogram":
+        if interpolation not in {"nearest", "bilinear"}:
+            raise ValueError("murel interpolation must be 'nearest' or 'bilinear'")
+
         blocks = []
         for pair in density.murel.pairs:
             key = (float(pair[0]), float(pair[1]))
@@ -125,6 +137,7 @@ class JaxMurelHistogram:
 
         mu_x, mu_y, mu_len = _pad_blocks([(block[0], block[1]) for block in blocks], max_mu_len)
         phi_x, phi_y, phi_len = _pad_blocks([(block[2], block[3]) for block in blocks], max_phi_len)
+        grid_index = _make_pair_grid_index(density.murel.pairs, density.murel.ds_values, density.murel.dl_values)
 
         return cls(
             pairs=jnp.asarray(density.murel.pairs),
@@ -135,10 +148,19 @@ class JaxMurelHistogram:
             phi_x=jnp.asarray(phi_x),
             phi_y=jnp.asarray(phi_y),
             phi_len=jnp.asarray(phi_len),
+            ds_values=jnp.asarray(density.murel.ds_values),
+            dl_values=jnp.asarray(density.murel.dl_values),
+            grid_index=jnp.asarray(grid_index),
+            interpolation=interpolation,
             grid=dict(density.murel.grid),
         )
 
     def densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[jnp.ndarray, jnp.ndarray]:
+        if self.interpolation == "bilinear":
+            p_mu, p_phi = self._bilinear_densities(dl_kpc, ds_kpc, mu, phi)
+            valid = ds_kpc > dl_kpc
+            return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
+
         idx = self._nearest_pair_index(dl_kpc, ds_kpc)
         p_mu = _interp_padded(mu, self.mu_x[idx], self.mu_y[idx], self.mu_len[idx])
         p_phi = _interp_padded(_wrap_phi(phi), self.phi_x[idx], self.phi_y[idx], self.phi_len[idx])
@@ -148,6 +170,49 @@ class JaxMurelHistogram:
     def _nearest_pair_index(self, dl_kpc: float, ds_kpc: float) -> jnp.ndarray:
         target = jnp.array([ds_kpc * 1000.0, dl_kpc * 1000.0])
         return jnp.argmin(jnp.sum(((self.pairs - target) / self.pair_scale) ** 2, axis=1))
+
+    def _bilinear_densities(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        mu: float,
+        phi: float,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        ds_pc = ds_kpc * 1000.0
+        dl_pc = dl_kpc * 1000.0
+        ds0, ds1, w_ds, in_ds = _bracket(self.ds_values, ds_pc)
+        dl0, dl1, w_dl, in_dl = _bracket(self.dl_values, dl_pc)
+
+        p00_mu, p00_phi, v00 = self._densities_at_grid(ds0, dl0, mu, phi)
+        p01_mu, p01_phi, v01 = self._densities_at_grid(ds0, dl1, mu, phi)
+        p10_mu, p10_phi, v10 = self._densities_at_grid(ds1, dl0, mu, phi)
+        p11_mu, p11_phi, v11 = self._densities_at_grid(ds1, dl1, mu, phi)
+
+        w00 = (1.0 - w_ds) * (1.0 - w_dl) * v00
+        w01 = (1.0 - w_ds) * w_dl * v01
+        w10 = w_ds * (1.0 - w_dl) * v10
+        w11 = w_ds * w_dl * v11
+        wsum = w00 + w01 + w10 + w11
+        p_mu = w00 * p00_mu + w01 * p01_mu + w10 * p10_mu + w11 * p11_mu
+        p_phi = w00 * p00_phi + w01 * p01_phi + w10 * p10_phi + w11 * p11_phi
+        p_mu = jnp.where(wsum > 0.0, p_mu / wsum, 0.0)
+        p_phi = jnp.where(wsum > 0.0, p_phi / wsum, 0.0)
+        valid = in_ds & in_dl & (wsum > 0.0)
+        return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
+
+    def _densities_at_grid(
+        self,
+        ds_index: jnp.ndarray,
+        dl_index: jnp.ndarray,
+        mu: float,
+        phi: float,
+    ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        idx = self.grid_index[ds_index, dl_index]
+        valid = idx >= 0
+        safe_idx = jnp.maximum(idx, 0)
+        p_mu = _interp_padded(mu, self.mu_x[safe_idx], self.mu_y[safe_idx], self.mu_len[safe_idx])
+        p_phi = _interp_padded(_wrap_phi(phi), self.phi_x[safe_idx], self.phi_y[safe_idx], self.phi_len[safe_idx])
+        return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0), valid
 
 
 class JaxHistogramDensity:
@@ -180,6 +245,7 @@ class JaxHistogramDensity:
         murel_path: str | Path,
         *,
         require_source_selection: bool = True,
+        murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
     ) -> "JaxHistogramDensity":
         return cls.from_numpy(
             HistogramDensity.from_paths(
@@ -187,24 +253,37 @@ class JaxHistogramDensity:
                 rho_path,
                 murel_path,
                 require_source_selection=require_source_selection,
-            )
+            ),
+            murel_interpolation=murel_interpolation,
         )
 
     @classmethod
-    def from_pre_run(cls, pre_run_result, *, require_source_selection: bool = True) -> "JaxHistogramDensity":
+    def from_pre_run(
+        cls,
+        pre_run_result,
+        *,
+        require_source_selection: bool = True,
+        murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
+    ) -> "JaxHistogramDensity":
         return cls.from_paths(
             pre_run_result.mass_path,
             pre_run_result.rho_path,
             pre_run_result.murel_path,
             require_source_selection=require_source_selection,
+            murel_interpolation=murel_interpolation,
         )
 
     @classmethod
-    def from_numpy(cls, density: HistogramDensity) -> "JaxHistogramDensity":
+    def from_numpy(
+        cls,
+        density: HistogramDensity,
+        *,
+        murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
+    ) -> "JaxHistogramDensity":
         return cls(
             mass=JaxMassHistogram.from_numpy(density),
             distance=JaxDistanceDensityTable.from_numpy(density),
-            murel=JaxMurelHistogram.from_numpy(density),
+            murel=JaxMurelHistogram.from_numpy(density, interpolation=murel_interpolation),
             component_names=density.component_names,
         )
 
@@ -265,6 +344,30 @@ def _pad_blocks(blocks: list[tuple[np.ndarray, np.ndarray]], width: int) -> tupl
             step = _padding_step(x)
             x_out[i, n:] = x[-1] + step * np.arange(1, width - n + 1)
     return x_out, y_out, lengths
+
+
+def _make_pair_grid_index(pairs: np.ndarray, ds_values: np.ndarray, dl_values: np.ndarray) -> np.ndarray:
+    grid = np.full((len(ds_values), len(dl_values)), -1, dtype=int)
+    ds_lookup = {float(value): index for index, value in enumerate(ds_values)}
+    dl_lookup = {float(value): index for index, value in enumerate(dl_values)}
+    for index, pair in enumerate(pairs):
+        ds_index = ds_lookup[float(pair[0])]
+        dl_index = dl_lookup[float(pair[1])]
+        grid[ds_index, dl_index] = index
+    return grid
+
+
+def _bracket(values: jnp.ndarray, value: float) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    n = values.shape[0]
+    right = jnp.searchsorted(values, value, side="right")
+    right = jnp.clip(right, 1, n - 1)
+    left = right - 1
+    x0 = values[left]
+    x1 = values[right]
+    denom = jnp.where(x1 != x0, x1 - x0, 1.0)
+    weight = (value - x0) / denom
+    in_range = (value >= values[0]) & (value <= values[-1])
+    return left, right, jnp.clip(weight, 0.0, 1.0), in_range
 
 
 def _padding_step(x: np.ndarray) -> float:
