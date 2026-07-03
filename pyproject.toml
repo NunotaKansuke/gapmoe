@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,17 +8,18 @@ version = "0.1.0"
 description = "Galactic prior tools for microlensing event modeling"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "gapmoe contributors" },
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Astronomy",
 ]
 dependencies = [
@@ -37,12 +38,19 @@ examples = [
   "matplotlib",
 ]
 dev = [
+  "build",
   "corner",
   "emcee",
   "jax",
   "matplotlib",
   "pytest",
+  "twine",
 ]
+
+[project.urls]
+Homepage = "https://github.com/NunotaKansuke/gapmoe"
+Repository = "https://github.com/NunotaKansuke/gapmoe"
+Issues = "https://github.com/NunotaKansuke/gapmoe/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -7,6 +7,26 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
+
+  core-install:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -15,8 +35,58 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install package
-        run: python -m pip install -e ".[dev]"
+      - name: Install package without extras
+        run: python -m pip install .
 
-      - name: Run tests
-        run: pytest -q
+      - name: Smoke test core backend without JAX
+        run: |
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          import tempfile
+
+          from gapmoe import PreRunner
+          from gapmoe.density import HistogramDensity
+
+          assert importlib.util.find_spec("jax") is None
+
+          out = Path(tempfile.mkdtemp(prefix="gapmoe-core-ci-"))
+          runner = PreRunner(output_dir=out)
+          pre_run = runner.run(
+              l=1.0,
+              b=-3.9,
+              run_name="smoke",
+              distance_max_pc=1000,
+              rho_step_pc=500,
+              murel_distance_step_pc=500,
+              d_min_pc=500,
+              dl_min_pc=0,
+              ds_min_pc=500,
+              n_simu=100,
+              mu_max_masyr=20,
+              dmu_masyr=5,
+              autoerr=False,
+          )
+          density = HistogramDensity.from_pre_run(pre_run)
+          assert runner.backend == "python"
+          assert density.murel.rows.shape[1] == 6
+          PY
+
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: python -m pip install build twine
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Check distributions
+        run: python -m twine check dist/*
