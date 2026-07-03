@@ -51,18 +51,6 @@ protocol to add your own::
     prior = GalacticPrior(density, parameterization=MyParam())
 """
 
-from gapmoe.parameterizations.base import MappingContext, Parameterization
-from gapmoe.parameterizations.binary_lens import (
-    BinaryCircularParameterization,
-    BinaryCircularUseThEParameterization,
-    BinaryKeplerParameterization,
-)
-from gapmoe.parameterizations.single_lens import (
-    SingleLensParameterization,
-    SingleLensUseThEParameterization,
-)
-from gapmoe.EarthMotion import calc_vEarth
-
 __all__ = [
     "Parameterization",
     "MappingContext",
@@ -73,3 +61,41 @@ __all__ = [
     "SingleLensUseThEParameterization",
     "calc_vEarth",
 ]
+
+
+def __getattr__(name):
+    if name in {"Parameterization", "MappingContext"}:
+        from gapmoe.parameterizations.base import MappingContext, Parameterization
+
+        exports = {"Parameterization": Parameterization, "MappingContext": MappingContext}
+        return exports[name]
+    if name in {
+        "BinaryCircularParameterization",
+        "BinaryCircularUseThEParameterization",
+        "BinaryKeplerParameterization",
+    }:
+        from gapmoe.parameterizations.binary_lens import (
+            BinaryCircularParameterization,
+            BinaryCircularUseThEParameterization,
+            BinaryKeplerParameterization,
+        )
+
+        exports = {
+            "BinaryCircularParameterization": BinaryCircularParameterization,
+            "BinaryCircularUseThEParameterization": BinaryCircularUseThEParameterization,
+            "BinaryKeplerParameterization": BinaryKeplerParameterization,
+        }
+        return exports[name]
+    if name in {"SingleLensParameterization", "SingleLensUseThEParameterization"}:
+        from gapmoe.parameterizations.single_lens import SingleLensParameterization, SingleLensUseThEParameterization
+
+        exports = {
+            "SingleLensParameterization": SingleLensParameterization,
+            "SingleLensUseThEParameterization": SingleLensUseThEParameterization,
+        }
+        return exports[name]
+    if name == "calc_vEarth":
+        from gapmoe.EarthMotion import calc_vEarth
+
+        return calc_vEarth
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
