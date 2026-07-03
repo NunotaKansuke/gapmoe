@@ -363,7 +363,10 @@ def _build_pair_blocks(rows: np.ndarray) -> tuple[np.ndarray, dict[tuple[float, 
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:
     if len(x) < 2:
         return 0.0
-    return float(np.trapz(y, x))
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:
+        trapezoid = np.trapz
+    return float(trapezoid(y, x))
 
 
 def _integral_until(x: np.ndarray, y: np.ndarray, xmax: float) -> float:

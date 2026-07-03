@@ -241,4 +241,7 @@ class gapmoe(GalacticModel):
 def _trapz(y: np.ndarray, x: np.ndarray) -> float:
     if len(x) < 2:
         return 0.0
-    return float(np.trapz(y, x))
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:
+        trapezoid = np.trapz
+    return float(trapezoid(y, x))
