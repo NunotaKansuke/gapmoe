@@ -183,6 +183,14 @@ def test_calc_vEarth_returns_tuple():
     v_N, v_E = calc_vEarth(2460000.0, 270.0, -30.0)
     assert np.isfinite(v_N)
     assert np.isfinite(v_E)
+    assert v_N == pytest.approx(-0.6556513128, rel=1e-9)
+    assert v_E == pytest.approx(2.7273324385, rel=1e-9)
+
+
+def test_calc_vEarth_accepts_reduced_jd():
+    v_N, v_E = calc_vEarth(9000.0, 270.0, -30.0)
+    assert v_N == pytest.approx(-0.2569462867, rel=1e-9)
+    assert v_E == pytest.approx(-5.7716627122, rel=1e-9)
 
 
 class _DummyJaxDensity:

@@ -55,5 +55,8 @@ Issues = "https://github.com/NunotaKansuke/gapmoe/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+gapmoe = ["data/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
