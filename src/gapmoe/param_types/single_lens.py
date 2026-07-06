@@ -1,8 +1,8 @@
-"""Single-lens light-curve parameterizations.
+"""Single-lens light-curve param_types.
 
 Each class maps a single-lens light-curve parameter vector to the five physical
 parameters ``(ML, DL, DS, mu_N, mu_E)`` used by the Galactic density model, and
-provides the corresponding log-Jacobian for use with ``GalacticPrior``.
+provides the corresponding log-Jacobian for use with ``GalacticModel``.
 
 Two variants are provided:
 
@@ -19,7 +19,7 @@ All classes require the following context key:
 
 - ``"vEarth"`` : ``tuple[float, float]`` — heliocentric Earth velocity
   ``(v_N, v_E)`` in AU/yr at the reference time ``t0``.
-  Compute with ``gapmoe.parameterizations.calc_vEarth``.
+  Compute with ``gapmoe.param_types.calc_vEarth``.
 
 The rho-based class additionally requires:
 
@@ -33,7 +33,7 @@ from typing import Any, Optional
 import jax.numpy as jnp
 from jax import jacfwd, jit
 
-from gapmoe.parameterizations.base import MappingContext
+from gapmoe.param_types.base import MappingContext
 
 _G = 2.959122082855911e-4   # AU^3 / (Msun * day^2)
 _KAPPA = 8.1429             # mas / Msun
@@ -41,7 +41,7 @@ _KAPPA = 8.1429             # mas / Msun
 
 # ---------------------------------------------------------------------------
 # JAX kernel functions — exact math from the original parametrics module.
-# These are private; use the Parameterization classes instead.
+# These are private; use the ParamType classes instead.
 # ---------------------------------------------------------------------------
 
 @jit
@@ -134,7 +134,7 @@ def _vEarth(context: Optional[MappingContext]):
     if context is None or "vEarth" not in context:
         raise ValueError(
             "context must include 'vEarth': (v_N, v_E) in AU/yr. "
-            "Use gapmoe.parameterizations.calc_vEarth to compute it."
+            "Use gapmoe.param_types.calc_vEarth to compute it."
         )
     return context["vEarth"]
 
@@ -148,11 +148,11 @@ def _thS(context: Optional[MappingContext]):
 
 
 # ---------------------------------------------------------------------------
-# Public parameterization classes
+# Public param_type classes
 # ---------------------------------------------------------------------------
 
-class SingleLensParameterization:
-    """Single-lens parameterization with free source distance (rho-based).
+class SingleLensParamType:
+    """Single-lens param_type with free source distance (rho-based).
 
     Parameter vector ``theta`` must have 7 elements in this order:
 
@@ -181,10 +181,10 @@ class SingleLensParameterization:
         return _jacobian_single(theta, _thS(context), _vEarth(context))
 
 
-class SingleLensUseThEParameterization:
-    """Single-lens parameterization with free source distance (thE-based).
+class SingleLensUseThEParamType:
+    """Single-lens param_type with free source distance (thE-based).
 
-    Like :class:`SingleLensParameterization` but uses the Einstein radius
+    Like :class:`SingleLensParamType` but uses the Einstein radius
     ``thE`` directly instead of the source-radius ratio ``rho``.
 
     Parameter vector ``theta`` must have 7 elements:

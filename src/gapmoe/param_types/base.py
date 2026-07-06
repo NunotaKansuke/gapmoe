@@ -6,10 +6,10 @@ from typing import Any, Optional, Protocol
 MappingContext = dict[str, Any]
 
 
-class Parameterization(Protocol):
+class ParamTypeProtocol(Protocol):
     """Protocol for light-curve-to-physical parameter mappings.
 
-    A Parameterization maps a user/light-curve parameter vector *theta* into
+    A param_type maps a user/light-curve parameter vector *theta* into
     the five physical parameters ``(ML, DL, DS, mu_N, mu_E)`` that the Galactic
     density model expects, and provides the log-Jacobian term for the change of
     variables.
@@ -22,13 +22,13 @@ class Parameterization(Protocol):
     context dict:
 
     - ``"thS"`` : float — source angular radius in mas.
-      Required for rho-based parameterizations; not needed when theta already
+      Required for rho-based param_types; not needed when theta already
       contains the Einstein radius directly.
     - ``"vEarth"`` : tuple[float, float] — heliocentric Earth velocity at the
       reference time, ``(v_N, v_E)`` in AU/yr.
-      Obtain from ``gapmoe.parameterizations.calc_vEarth``.
+      Obtain from ``gapmoe.param_types.calc_vEarth``.
 
-    **Implementing a custom parameterization**
+    **Implementing a custom param_type**
 
     Subclass or duck-type this protocol::
 
@@ -65,3 +65,15 @@ class Parameterization(Protocol):
     ):
         """Return ``log |det J|`` of the full parameter transformation."""
         ...
+
+    # Direction-marginalized param_types may additionally define:
+    #
+    # uses_mu_physical = True
+    #
+    # def to_mu_physical(self, theta, context=None):
+    #     return ML, DL, DS, mu
+    #
+    # uses_theta_mu_physical = True
+    #
+    # def to_theta_mu_physical(self, theta, context=None):
+    #     return thetaE, mu

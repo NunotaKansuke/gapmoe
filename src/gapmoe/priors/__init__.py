@@ -1,14 +1,14 @@
 from .event_rate import log_event_rate
-from .galactic import GalacticPrior
+from .galactic import GalacticModel
 
-__all__ = ["GalacticPrior", "JaxGalacticPrior", "jax_log_event_rate", "log_event_rate"]
+__all__ = ["GalacticModel", "JaxGalacticModel", "jax_log_event_rate", "log_event_rate"]
 
 
 def __getattr__(name):
-    if name == "JaxGalacticPrior":
-        from .galactic_jax import JaxGalacticPrior
+    if name == "JaxGalacticModel":
+        from .galactic_jax import JaxGalacticModel
 
-        return JaxGalacticPrior
+        return JaxGalacticModel
     if name == "jax_log_event_rate":
         from .event_rate_jax import jax_log_event_rate
 
