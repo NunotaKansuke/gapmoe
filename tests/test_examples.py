@@ -33,7 +33,7 @@ def test_pre_runner_notebook_code_compiles_and_is_clear() -> None:
     assert "PreRunner" in source
     assert "runner.run(" in source
     assert "HistogramDensity.from_paths(" in source
-    assert "GalacticPrior(density)" in source
+    assert "GalacticModel(density)" in source
     assert "prior.log_prob(" in source
 
     _assert_compiles(path, code_cells)
@@ -45,7 +45,7 @@ def test_emcee_physical_params_notebook_code_compiles_and_is_clear() -> None:
     _assert_clean(code_cells)
 
     assert "HistogramDensity.from_paths(" in source
-    assert "GalacticPrior(density)" in source
+    assert "GalacticModel(density)" in source
     assert "prior.log_prob(*theta)" in source
     assert "genulens_out.dat" in source
     assert "genulens_weights" in source

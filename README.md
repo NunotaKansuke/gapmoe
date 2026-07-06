@@ -78,7 +78,7 @@ also try `make` automatically with `PreRunner(..., auto_build=True)`.
 ## Minimal Usage
 
 ```python
-from gapmoe import GalacticPrior, HistogramDensity, PreRunner
+from gapmoe import GalacticModel, HistogramDensity, PreRunner
 
 runner = PreRunner(
     output_dir="example/pre_runner_outputs",
@@ -91,7 +91,7 @@ pre_run = runner.run(
 )
 
 density = HistogramDensity.from_pre_run(pre_run)
-prior = GalacticPrior(density)
+prior = GalacticModel(density)
 
 logp = prior.log_prob(
     0.3,  # ML [Msun]
@@ -106,7 +106,7 @@ If histogram files already exist:
 
 ```python
 density = HistogramDensity.from_paths("mass.dat", "rho.dat", "murel.dat")
-prior = GalacticPrior(density)
+prior = GalacticModel(density)
 ```
 
 ## JAX Backend
@@ -114,11 +114,11 @@ prior = GalacticPrior(density)
 The JAX backend mirrors the NumPy histogram semantics:
 
 ```python
-from gapmoe import HistogramDensity, JaxGalacticPrior, JaxHistogramDensity
+from gapmoe import HistogramDensity, JaxGalacticModel, JaxHistogramDensity
 
 np_density = HistogramDensity.from_paths("mass.dat", "rho.dat", "murel.dat")
 jax_density = JaxHistogramDensity.from_numpy(np_density)
-jax_prior = JaxGalacticPrior(jax_density)
+jax_prior = JaxGalacticModel(jax_density)
 ```
 
 The JAX backend is currently intended for batched evaluation workflows such as
@@ -155,12 +155,9 @@ The test suite uses a small committed histogram fixture under
 `tests/fixtures/small_source_default/` and mocks the `genulens.pre_gapmoe`
 integration path.
 
-## Legacy Modules
-
-`gapmoe.gapmoe`, `gapmoeJax.py`, and older parameter-conversion modules remain
-for compatibility while the public API stabilizes. New code should prefer:
+## Public API
 
 - `PreRunner`
 - `HistogramDensity` / `JaxHistogramDensity`
-- `GalacticPrior` / `JaxGalacticPrior`
-- `gapmoe.parameterizations`
+- `GalacticModel` / `JaxGalacticModel`
+- `gapmoe.param_types`

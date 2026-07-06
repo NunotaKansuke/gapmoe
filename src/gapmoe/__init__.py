@@ -6,31 +6,32 @@ __all__ = [
     "SourceSelection",
     "HistogramDensity",
     "JaxHistogramDensity",
-    "GalacticPrior",
-    "JaxGalacticPrior",
-    "BinaryCircularParameterization",
-    "BinaryCircularUseThEParameterization",
-    "BinaryKeplerParameterization",
-    "SingleLensParameterization",
-    "SingleLensUseThEParameterization",
-    "gapmoe",
+    "JaxGalacticModel",
+    "BinaryCircularParamType",
+    "BinaryCircularUseThEParamType",
+    "BinaryKeplerParamType",
+    "SingleLensParamType",
+    "SingleLensUseThEParamType",
+    "ParamType",
+    "from_model_spec",
 ]
 
-_PARAMETERIZATIONS = {
-    "BinaryCircularParameterization",
-    "BinaryCircularUseThEParameterization",
-    "BinaryKeplerParameterization",
-    "SingleLensParameterization",
-    "SingleLensUseThEParameterization",
+_PARAM_TYPES = {
+    "BinaryCircularParamType",
+    "BinaryCircularUseThEParamType",
+    "BinaryKeplerParamType",
+    "SingleLensParamType",
+    "SingleLensUseThEParamType",
+    "ParamType",
+    "from_model_spec",
 }
 
 
 def __getattr__(name):
-    if name in {"GalacticModel", "gapmoe"}:
-        from .model import GalacticModel, gapmoe
+    if name == "GalacticModel":
+        from .priors import GalacticModel
 
-        exports = {"GalacticModel": GalacticModel, "gapmoe": gapmoe}
-        return exports[name]
+        return GalacticModel
     if name in {"GenulensEnvironment", "PreRunner", "PreRunResult", "SourceSelection"}:
         from .pre_runner import GenulensEnvironment, PreRunner, PreRunResult, SourceSelection
 
@@ -49,16 +50,12 @@ def __getattr__(name):
         from .density import JaxHistogramDensity
 
         return JaxHistogramDensity
-    if name == "GalacticPrior":
-        from .priors import GalacticPrior
+    if name == "JaxGalacticModel":
+        from .priors import JaxGalacticModel
 
-        return GalacticPrior
-    if name == "JaxGalacticPrior":
-        from .priors import JaxGalacticPrior
-
-        return JaxGalacticPrior
-    if name in _PARAMETERIZATIONS:
-        from . import parameterizations as _pm
+        return JaxGalacticModel
+    if name in _PARAM_TYPES:
+        from . import param_types as _pm
 
         return getattr(_pm, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
