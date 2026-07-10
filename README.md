@@ -14,6 +14,51 @@ ML, DL, DS, mu_N, mu_E
 where `ML` is in solar masses, `DL` and `DS` are in kpc, and proper motions are
 in mas/yr.
 
+## Recommended API
+
+`Model.prepare(directory)` writes its fixed artifact names
+(`mass.dat`, `rho.dat`, `murel.dat`, `source_evidence.npz`, `manifest.json`)
+there, together with `gapmoe.json`. The latter records the sightline and
+gapmoe settings, so `Model().prepare(directory)` later restores them.
+
+```python
+import gapmoe
+
+model = gapmoe.Model()
+model.set(
+    l=1.0,
+    b=-3.9,
+    extinction={"Imag": 1.2, "Vmag": 2.0},
+    dm_rc=14.45,
+)
+model.prepare("runs/event-001")
+
+isochrone = model.isochrone(
+    reference_band="Imag",
+    color_bands=("Vmag", "Imag"),
+    magnitude_range=(15.0, 21.0),
+    color_range=(0.5, 3.0),
+)
+prior = model.galactic_model(isochrone)
+
+logp = prior.log_density(theta)
+logp_at_cmd = prior.log_density(theta, cmd=[i_s, v_minus_i_s])
+```
+
+To reuse an existing prepared directory without running genulens:
+
+```python
+model = gapmoe.Model().resume("runs/event-001")
+```
+
+Without `cmd`, the optional ranges in `isochrone()` define the source
+selection. With `cmd=[magnitude, colour]`, the prior instead conditions the
+source-distance distribution on that current CMD value; it does not apply the
+hard range a second time. If no ranges are supplied, all sources are used.
+
+For V/I work, `model.set(ai_rc=..., evi_rc=...)` is equivalent to supplying
+the matching per-band RC extinctions. For other bands, use `extinction`.
+
 ## Install
 
 From PyPI:

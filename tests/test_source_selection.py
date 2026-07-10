@@ -7,8 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from gapmoe import CmdPriorTable as PublicCmdPriorTable
-from gapmoe import HistogramDensity, SourceEvidenceGrid as PublicSourceEvidenceGrid
+from gapmoe.density import HistogramDensity
 from gapmoe.density.histogram_tables import MurelHistogram
 from gapmoe.source_selection import (
     ColorCut,
@@ -148,7 +147,6 @@ def test_cmd_prior_table_evaluates_apparent_magnitude_color_and_flux_density() -
         smoothing_sigma_bins=0.0,
     )
 
-    assert PublicCmdPriorTable is CmdPriorTable
     area = 2.0
     assert np.sum(table.density_by_component[0] * area) == pytest.approx(1.0)
 
@@ -223,7 +221,6 @@ def test_selection_probability_table_can_be_saved_loaded_and_interpolated(tmp_pa
     assert loaded.metadata == {"label": "test"}
     assert loaded.evidence(2, 2.5) == pytest.approx(0.75)
     assert loaded.evidence(5, 2.5) == pytest.approx(0.25)
-    assert PublicSourceEvidenceGrid is SourceEvidenceGrid
 
 
 @pytest.mark.parametrize(
