@@ -10,66 +10,15 @@ from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from astropy.coordinates import Angle, SkyCoord
 import astropy.units as u
+import numpy as np
+
+from gapmoe.source_selection import CmdPriorTable, GenulensSourceModel
 
 
 OptionValue = Union[str, int, float, bool]
 CoordinateValue = Union[str, int, float]
 OptionSequence = Sequence[OptionValue]
 OptionMap = Mapping[str, Union[OptionValue, OptionSequence]]
-
-
-@dataclass(frozen=True)
-class SourceSelection:
-    """Source weighting and extinction options for calc_rho_profile.
-
-    PreRunner enables genulens source weighting by default. If no explicit
-    selection options are supplied, calc_rho_profile uses the same fallback
-    source weighting as genulens.cpp.
-    """
-
-    enabled: bool = False
-    i_mag: Optional[float] = None
-    i_mag_error: Optional[float] = None
-    i_mag_range: Optional[Tuple[float, float]] = None
-    vi_color: Optional[float] = None
-    vi_color_error: Optional[float] = None
-    vi_color_range: Optional[Tuple[float, float]] = None
-    ai_rc: Optional[float] = None
-    evi_rc: Optional[float] = None
-    dm_rc: Optional[float] = None
-    hdust_pc: Optional[float] = None
-    gamma_ds: Optional[float] = None
-
-    def to_options(self) -> Dict[str, Union[OptionValue, Tuple[float, float]]]:
-        options: Dict[str, Union[OptionValue, Tuple[float, float]]] = {}
-        if self.enabled:
-            options["SOURCE"] = 1
-
-        if self.i_mag is not None:
-            options["Is"] = self.i_mag
-        if self.i_mag_error is not None:
-            options["Iserr"] = self.i_mag_error
-        if self.i_mag_range is not None:
-            options["Isrange"] = self.i_mag_range
-
-        if self.vi_color is not None:
-            options["VIs"] = self.vi_color
-        if self.vi_color_error is not None:
-            options["VIserr"] = self.vi_color_error
-        if self.vi_color_range is not None:
-            options["VIsrange"] = self.vi_color_range
-
-        if self.ai_rc is not None:
-            options["AIrc"] = self.ai_rc
-        if self.evi_rc is not None:
-            options["EVIrc"] = self.evi_rc
-        if self.dm_rc is not None:
-            options["DMrc"] = self.dm_rc
-        if self.hdust_pc is not None:
-            options["hdust"] = self.hdust_pc
-        if self.gamma_ds is not None:
-            options["gammaDs"] = self.gamma_ds
-        return options
 
 
 @dataclass(frozen=True)
@@ -83,6 +32,8 @@ class PreRunResult:
     rho_path: Path
     murel_path: Path
     manifest_path: Path
+    source_evidence_path: Path | None = None
+    cmd_prior_path: Path | None = None
     commands: Dict[str, Sequence[str]] = field(default_factory=dict)
 
 
@@ -174,7 +125,8 @@ class PreRunner:
         gal_b: Optional[CoordinateValue] = None,
         galactic_l: Optional[CoordinateValue] = None,
         galactic_b: Optional[CoordinateValue] = None,
-        source: Optional[SourceSelection] = None,
+        source_model: GenulensSourceModel | None = None,
+        cmd_prior: CmdPriorTable | None = None,
         run_name: Optional[str] = None,
         distance_max_pc: float = 16000.0,
         rho_step_pc: float = 1.0,
@@ -236,6 +188,8 @@ class PreRunner:
         rho_path = run_dir / "rho.dat"
         murel_path = run_dir / "murel.dat"
         manifest_path = run_dir / "manifest.json"
+        source_evidence_path = run_dir / "source_evidence.npz"
+        cmd_prior_path = run_dir / "cmd_prior.npz" if cmd_prior is not None else None
 
         for path in (mass_path, rho_path, murel_path, manifest_path):
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,16 +215,25 @@ class PreRunner:
 
         rho_base: Dict[str, Union[OptionValue, OptionSequence]] = {
             **base_options,
-            "SOURCE": 1,
+            # gapmoe reconstructs the source base nMS * D_S^2 itself.  Do not
+            # request calc_rho_profile's legacy gammaDs/rhoD_S output.
+            "SOURCE": 0,
             "Dmin": d_min_pc,
             "Dmax": rho_max_pc,
             "Dstep": rho_d_step_pc,
         }
-        if source is not None:
-            rho_base.update(source.to_options())
         rho_options_merged = self._merge_options(rho_base, rho_options)
         rho_cmd = self._run_tool("calc_rho_profile", rho_options_merged, rho_path)
         commands["rho"] = rho_cmd
+
+        table = self._build_forward_source_table(
+            source_model or GenulensSourceModel(),
+            self._rho_distance_grid(rho_path),
+            cmd_prior=cmd_prior,
+        )
+        table.save_npz(source_evidence_path)
+        if cmd_prior_path is not None:
+            cmd_prior.save_npz(cmd_prior_path)
 
         murel_base: Dict[str, OptionValue] = {
             **base_options,
@@ -284,6 +247,7 @@ class PreRunner:
             "Nsimu": n_simu,
             "mumax": mu_max_masyr,
             "dmu": dmu_masyr,
+            "SOURCEGROUPS": 1,
             "AUTOERR": int(autoerr),
         }
         if err_target is not None:
@@ -302,6 +266,8 @@ class PreRunner:
             rho_path=rho_path,
             murel_path=murel_path,
             manifest_path=manifest_path,
+            source_evidence_path=source_evidence_path,
+            cmd_prior_path=cmd_prior_path,
             commands=commands,
         )
         self._write_manifest(result)
@@ -526,9 +492,39 @@ class PreRunner:
             "mass_path": str(result.mass_path),
             "rho_path": str(result.rho_path),
             "murel_path": str(result.murel_path),
+            "source_evidence_path": (
+                str(result.source_evidence_path) if result.source_evidence_path is not None else None
+            ),
+            "cmd_prior_path": str(result.cmd_prior_path) if result.cmd_prior_path is not None else None,
             "commands": result.commands,
         }
         result.manifest_path.write_text(json.dumps(payload, indent=2) + "\n")
+
+    @staticmethod
+    def _rho_distance_grid(path: Path) -> np.ndarray:
+        data = np.atleast_2d(np.genfromtxt(path, comments="#"))
+        if data.size == 0 or data.shape[1] < 1:
+            raise ValueError(f"rho profile has no distance grid: {path}")
+        return np.asarray(data[:, 0], dtype=float)
+
+    def _build_forward_source_table(
+        self,
+        source_model: GenulensSourceModel,
+        distance_pc: np.ndarray,
+        *,
+        cmd_prior: CmdPriorTable | None = None,
+    ):
+        if self.backend != "cli" or self.genulens_root is None:
+            return source_model.build_evidence_grid(distance_pc, cmd_prior=cmd_prior)
+        previous = os.environ.get("GENULENS_INPUT_DIR")
+        os.environ["GENULENS_INPUT_DIR"] = str(self.genulens_root / "input_files")
+        try:
+            return source_model.build_evidence_grid(distance_pc, cmd_prior=cmd_prior)
+        finally:
+            if previous is None:
+                os.environ.pop("GENULENS_INPUT_DIR", None)
+            else:
+                os.environ["GENULENS_INPUT_DIR"] = previous
 
     @staticmethod
     def _python_api_name(tool: str) -> str:

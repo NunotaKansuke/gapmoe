@@ -4,7 +4,10 @@ import sys
 from types import SimpleNamespace
 from pathlib import Path
 
-from gapmoe import PreRunner
+import numpy as np
+
+from gapmoe import CmdCoordinates, CmdPriorTable, GenulensSourceModel, PreRunner, SourceSelection
+from gapmoe.source_selection import SourceEvidenceGrid
 
 
 def test_pre_runner_environment_reports_missing_tools(tmp_path: Path) -> None:
@@ -52,6 +55,12 @@ def test_pre_runner_can_use_genulens_python_api(monkeypatch, tmp_path: Path) -> 
     assert env.backend == "python"
     assert env.ok
 
+    cmd_prior = CmdPriorTable(
+        coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
+        reference_edges=np.asarray([0.0, 1.0]),
+        color_edges=np.asarray([0.0, 1.0]),
+        density_by_component=np.ones((11, 1, 1)),
+    )
     result = runner.run(
         l=1.0,
         b=-3.9,
@@ -60,11 +69,18 @@ def test_pre_runner_can_use_genulens_python_api(monkeypatch, tmp_path: Path) -> 
         rho_step_pc=500,
         murel_distance_step_pc=500,
         n_simu=100,
+        source_model=GenulensSourceModel(source_data=SourceSelection()),
+        cmd_prior=cmd_prior,
     )
 
     assert result.mass_path.read_text() == Table.stdout
     assert result.rho_path.read_text() == Table.stdout
     assert result.murel_path.read_text() == Table.stdout
     assert [name for name, _ in calls] == ["mass", "rho", "murel"]
-    assert calls[1][1]["SOURCE"] == 1
+    assert calls[1][1]["SOURCE"] == 0
     assert calls[2][1]["GRID"] == 1
+    assert calls[2][1]["SOURCEGROUPS"] == 1
+    assert result.source_evidence_path is not None
+    assert SourceEvidenceGrid.load_npz(result.source_evidence_path).evidence_by_component.shape == (1, 11)
+    assert result.cmd_prior_path is not None
+    assert CmdPriorTable.load_npz(result.cmd_prior_path).coordinates == cmd_prior.coordinates

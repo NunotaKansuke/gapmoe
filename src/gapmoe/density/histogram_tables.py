@@ -4,12 +4,15 @@ import re
 from dataclasses import dataclass
 from math import atan2, hypot, isfinite, log, pi
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import numpy as np
 
-from gapmoe.density.base import DensityModel
 from gapmoe.priors.event_rate import KAPPA, log_event_rate
+from gapmoe.source_selection import CmdPriorTable, ConditionedSourceDensity, OffsetProvider, SourceEvidenceGrid
+
+if TYPE_CHECKING:
+    from gapmoe.source_selection import GenulensSourceEvidenceBuilder
 
 
 COMPONENT_NAMES = (
@@ -25,6 +28,9 @@ COMPONENT_NAMES = (
     "NSD",
     "halo",
 )
+
+SOURCE_GROUP_NAMES = ("thin_disk", "thick_disk", "bulge", "NSD", "halo")
+SOURCE_GROUP_BY_COMPONENT = np.asarray((0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4), dtype=int)
 
 
 @dataclass(frozen=True)
@@ -46,8 +52,6 @@ class MassHistogram:
                 continue
             pdf_logm = component_density_logm[:, i] / integral_logm
             pdf_mass[:, i] = pdf_logm / (mass * np.log(10.0))
-            # Include the same exponentially decaying tails used at evaluation
-            # time in the normalisation of this physical-mass PDF.
             normalisation = _integral_with_tails(log_mass, pdf_mass[:, i], lower=None, measure=mass)
             if normalisation > 0.0:
                 pdf_mass[:, i] /= normalisation
@@ -71,35 +75,58 @@ class DistanceDensityTable:
     # distance_pc: raw distance grid from rho.dat, in pc.
     distance_pc: np.ndarray
     lens_density_by_component: np.ndarray
+    base_source_density_by_component: np.ndarray
+    source_density_by_component: np.ndarray
     source_density: np.ndarray
     lens_density_total: np.ndarray
     lens_cumulative_integral: np.ndarray
     source_norm: float
 
     @classmethod
-    def from_file(cls, path: str | Path, *, require_source_selection: bool = True) -> "DistanceDensityTable":
+    def from_file(cls, path: str | Path) -> "DistanceDensityTable":
         data = _load_2d(path)
         distance_pc = data[:, 0]
 
         if data.shape[1] < 25:
             raise ValueError(f"rho table has {data.shape[1]} columns, expected at least 25: {path}")
-        if require_source_selection and data.shape[1] < 37:
-            raise ValueError(
-                "rho table does not contain rhoD_S source-density columns. "
-                "Run PreRunner/calc_rho_profile with SOURCE=1 so p(DS) is "
-                f"conditioned on observed source selection: {path}"
-            )
 
         lens_density_by_component = data[:, 1:12]
-        source_density = data[:, 36] if data.shape[1] >= 37 else data[:, 12]
+        # genulens' forward-source grid uses nMS * P(select) * 1e-6 * D^2.
+        # Keep that unselected geometric factor separately from rhoD_S, whose
+        # no-cut fallback carries the legacy gammaDs distance weighting.
+        base_source_density_by_component = lens_density_by_component * 1.0e-6 * distance_pc[:, None] ** 2
+        # ``rhoD_S`` is a legacy, selection-specific output which can carry a
+        # gammaDs weighting.  The canonical source base is always nMS * D_S^2;
+        # hard cuts and CMD density factors are applied explicitly afterward.
+        source_density_by_component = base_source_density_by_component
+        source_density = source_density_by_component.sum(axis=1)
         lens_density_total = lens_density_by_component.sum(axis=1)
         return cls(
             distance_pc=distance_pc,
             lens_density_by_component=lens_density_by_component,
+            base_source_density_by_component=base_source_density_by_component,
+            source_density_by_component=source_density_by_component,
             source_density=source_density,
             lens_density_total=lens_density_total,
             lens_cumulative_integral=_cumulative_trapezoid(distance_pc, lens_density_total),
             source_norm=_integral_with_tails(distance_pc, source_density, lower=0.0),
+        )
+
+    def with_source_evidence(self, evidence: SourceEvidenceGrid) -> "DistanceDensityTable":
+        selected = ConditionedSourceDensity.from_base_density(
+            self.distance_pc,
+            self.base_source_density_by_component,
+            evidence,
+        )
+        return DistanceDensityTable(
+            distance_pc=self.distance_pc,
+            lens_density_by_component=self.lens_density_by_component,
+            base_source_density_by_component=self.base_source_density_by_component,
+            source_density_by_component=selected.source_density_by_component,
+            source_density=selected.source_density,
+            lens_density_total=self.lens_density_total,
+            lens_cumulative_integral=self.lens_cumulative_integral,
+            source_norm=selected.source_norm,
         )
 
     def source_pdf(self, ds_kpc: float) -> float:
@@ -113,8 +140,9 @@ class DistanceDensityTable:
     def source_pdf_array(self, ds_kpc: np.ndarray) -> np.ndarray:
         if self.source_norm <= 0.0:
             return np.zeros_like(ds_kpc, dtype=float)
-        val = np.interp(ds_kpc * 1000.0, self.distance_pc, self.source_density, left=0.0, right=0.0)
-        return val / self.source_norm
+        values = np.asarray(ds_kpc, dtype=float)
+        val = _interp_positive_tail_array(values * 1000.0, self.distance_pc, self.source_density, lower=0.0)
+        return np.where(values > 0.0, 1000.0 * val / self.source_norm, 0.0)
 
     def lens_pdf_given_source(self, dl_kpc: float, ds_kpc: float) -> float:
         if dl_kpc <= 0.0 or ds_kpc <= dl_kpc:
@@ -128,10 +156,10 @@ class DistanceDensityTable:
     def lens_pdf_given_source_array(self, dl_kpc: np.ndarray, ds_kpc: np.ndarray) -> np.ndarray:
         dl_kpc, ds_kpc = np.broadcast_arrays(dl_kpc, ds_kpc)
         norm = self._lens_integral_until_array(ds_kpc)
-        val = np.interp(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, left=0.0, right=0.0)
+        val = _interp_positive_tail_array(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, lower=0.0)
         out = np.zeros_like(dl_kpc, dtype=float)
-        valid = (ds_kpc > dl_kpc) & (norm > 0.0)
-        np.divide(val, norm, out=out, where=valid)
+        valid = (dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (norm > 0.0)
+        np.divide(1000.0 * val, norm, out=out, where=valid)
         return out
 
     def _lens_integral_until(self, ds_kpc: float) -> float:
@@ -207,6 +235,36 @@ class DistanceDensityTable:
         np.divide(vals, total[..., None], out=out, where=total[..., None] > 0.0)
         return out
 
+    def source_group_weights(self, ds_kpc: float) -> np.ndarray:
+        component_values = np.array(
+            [
+                np.interp(ds_kpc * 1000.0, self.distance_pc, self.source_density_by_component[:, i], left=0.0, right=0.0)
+                for i in range(self.source_density_by_component.shape[1])
+            ]
+        )
+        weights = np.bincount(SOURCE_GROUP_BY_COMPONENT, weights=component_values, minlength=len(SOURCE_GROUP_NAMES))
+        total = weights.sum()
+        return weights / total if total > 0.0 else np.zeros_like(weights)
+
+    def source_group_weights_array(self, ds_kpc: np.ndarray) -> np.ndarray:
+        ds_kpc = np.asarray(ds_kpc, dtype=float)
+        component_values = np.zeros(ds_kpc.shape + (self.source_density_by_component.shape[1],), dtype=float)
+        for i in range(self.source_density_by_component.shape[1]):
+            component_values[..., i] = np.interp(
+                ds_kpc * 1000.0,
+                self.distance_pc,
+                self.source_density_by_component[:, i],
+                left=0.0,
+                right=0.0,
+            )
+        weights = np.zeros(ds_kpc.shape + (len(SOURCE_GROUP_NAMES),), dtype=float)
+        for group in range(len(SOURCE_GROUP_NAMES)):
+            weights[..., group] = component_values[..., SOURCE_GROUP_BY_COMPONENT == group].sum(axis=-1)
+        total = weights.sum(axis=-1)
+        out = np.zeros_like(weights)
+        np.divide(weights, total[..., None], out=out, where=total[..., None] > 0.0)
+        return out
+
 
 @dataclass(frozen=True)
 class MurelHistogram:
@@ -218,6 +276,8 @@ class MurelHistogram:
     dl_values: np.ndarray
     pair_scale: np.ndarray
     grid: dict[str, float]
+    source_group_mu: np.ndarray | None = None
+    source_group_phi: np.ndarray | None = None
 
     @classmethod
     def from_file(cls, path: str | Path) -> "MurelHistogram":
@@ -229,6 +289,8 @@ class MurelHistogram:
         ds_values = np.unique(pairs[:, 0])
         dl_values = np.unique(pairs[:, 1])
         pair_scale = np.array([max(np.ptp(ds_values), 1.0), max(np.ptp(dl_values), 1.0)])
+        source_group_mu = rows[:, 6:11] if rows.shape[1] >= 16 else None
+        source_group_phi = rows[:, 11:16] if rows.shape[1] >= 16 else None
         return cls(
             rows=rows,
             pairs=pairs,
@@ -237,24 +299,50 @@ class MurelHistogram:
             dl_values=dl_values,
             pair_scale=pair_scale,
             grid=grid,
+            source_group_mu=source_group_mu,
+            source_group_phi=source_group_phi,
         )
 
-    def densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[float, float]:
-        if dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
-            return 0.0, 0.0
-        return self.nearest_densities(dl_kpc, ds_kpc, mu, phi)
+    @property
+    def has_source_groups(self) -> bool:
+        return self.source_group_mu is not None and self.source_group_phi is not None
 
-    def mu_density(self, dl_kpc: float, ds_kpc: float, mu: float) -> float:
+    def densities(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        mu: float,
+        phi: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> tuple[float, float]:
+        if ds_kpc <= dl_kpc:
+            return 0.0, 0.0
+        return self.nearest_densities(dl_kpc, ds_kpc, mu, phi, source_group_weights)
+
+    def mu_density(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        mu: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> float:
         if ds_kpc <= dl_kpc:
             return 0.0
         pair_pc = self._nearest_pair(dl_kpc * 1000.0, ds_kpc * 1000.0)
-        return self._mu_density_for_pair(pair_pc, mu)
+        return self._mu_density_for_pair(pair_pc, mu, source_group_weights)
 
-    def mu_density_for_pair_indices(self, pair_indices: np.ndarray, mu: float) -> np.ndarray:
+    def mu_density_for_pair_indices(
+        self,
+        pair_indices: np.ndarray,
+        mu: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> np.ndarray:
         out = np.zeros(pair_indices.shape, dtype=float)
         for idx in np.unique(pair_indices[pair_indices >= 0]):
             pair = self.pairs[int(idx)]
-            out[pair_indices == idx] = self._mu_density_for_pair(pair, mu)
+            mask = pair_indices == idx
+            weights = source_group_weights[mask] if source_group_weights is not None else None
+            out[mask] = self._mu_density_for_pair_array(pair, np.full(mask.sum(), mu), weights)
         return out
 
     def densities_for_pair_indices(
@@ -262,6 +350,7 @@ class MurelHistogram:
         pair_indices: np.ndarray,
         mu: np.ndarray,
         phi: np.ndarray,
+        source_group_weights: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         p_mu = np.zeros(pair_indices.shape, dtype=float)
         p_phi = np.zeros(pair_indices.shape, dtype=float)
@@ -275,25 +364,40 @@ class MurelHistogram:
                 continue
             block = self.rows[block_slice]
             mu_x = block[:, 2]
-            mu_y = block[:, 4]
             valid_mu = mu_x > 0.0
-            p_mu[mask] = _interp_unique_array(mu[mask], mu_x[valid_mu], mu_y[valid_mu])
-            p_phi[mask] = _interp_unique_array(phi[mask], block[:, 3], block[:, 5])
+            weights = source_group_weights[mask] if source_group_weights is not None else None
+            p_mu[mask] = self._interpolate_source_groups(
+                mu[mask], mu_x[valid_mu], block_slice, 4, weights, valid_mu
+            )
+            p_phi[mask] = self._interpolate_source_groups(phi[mask], block[:, 3], block_slice, 5, weights)
         return p_mu, p_phi
 
 
-    def nearest_densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[float, float]:
-        if dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
+    def nearest_densities(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        mu: float,
+        phi: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> tuple[float, float]:
+        if ds_kpc <= dl_kpc:
             return 0.0, 0.0
         pair_pc = self._nearest_pair(dl_kpc * 1000.0, ds_kpc * 1000.0)
-        return self._densities_for_pair(pair_pc, mu, phi)
+        return self._densities_for_pair(pair_pc, mu, phi, source_group_weights)
 
     def nearest_pair(self, dl_kpc: float, ds_kpc: float) -> tuple[float, float]:
         """Return the nearest tabulated (DS, DL) block center in kpc."""
         pair_pc = self._nearest_pair(dl_kpc * 1000.0, ds_kpc * 1000.0)
         return float(pair_pc[0]) / 1000.0, float(pair_pc[1]) / 1000.0
 
-    def _densities_for_pair(self, pair: np.ndarray, mu: float, phi: float) -> tuple[float, float]:
+    def _densities_for_pair(
+        self,
+        pair: np.ndarray,
+        mu: float,
+        phi: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> tuple[float, float]:
         key = (float(pair[0]), float(pair[1]))
         block_slice = self.block_slices.get(key)
         if block_slice is None:
@@ -301,26 +405,66 @@ class MurelHistogram:
         block = self.rows[block_slice]
 
         mu_x = block[:, 2]
-        mu_y = block[:, 4]
         valid_mu = mu_x > 0.0
-        p_mu = _interp_positive_tail(mu, mu_x[valid_mu], mu_y[valid_mu], lower=0.0)
-
-        phi_x = block[:, 3]
-        phi_y = block[:, 5]
-        p_phi = _interp_unique(_wrap_phi(phi), phi_x, phi_y)
+        p_mu = self._interpolate_source_groups(
+            np.asarray([mu]), mu_x[valid_mu], block_slice, 4, source_group_weights, valid_mu
+        )[0]
+        p_phi = self._interpolate_source_groups(
+            np.asarray([_wrap_phi(phi)]), block[:, 3], block_slice, 5, source_group_weights
+        )[0]
         return p_mu, p_phi
 
-    def _mu_density_for_pair(self, pair: np.ndarray, mu: float) -> float:
+    def _mu_density_for_pair(
+        self,
+        pair: np.ndarray,
+        mu: float,
+        source_group_weights: np.ndarray | None = None,
+    ) -> float:
+        return float(self._mu_density_for_pair_array(pair, np.asarray([mu]), source_group_weights)[0])
+
+    def _mu_density_for_pair_array(
+        self,
+        pair: np.ndarray,
+        mu: np.ndarray,
+        source_group_weights: np.ndarray | None = None,
+    ) -> np.ndarray:
         key = (float(pair[0]), float(pair[1]))
         block_slice = self.block_slices.get(key)
         if block_slice is None:
-            return 0.0
+            return np.zeros_like(mu, dtype=float)
         block = self.rows[block_slice]
 
         mu_x = block[:, 2]
-        mu_y = block[:, 4]
         valid_mu = mu_x > 0.0
-        return _interp_unique(mu, mu_x[valid_mu], mu_y[valid_mu])
+        return self._interpolate_source_groups(mu, mu_x[valid_mu], block_slice, 4, source_group_weights, valid_mu)
+
+    def _interpolate_source_groups(
+        self,
+        values: np.ndarray,
+        x: np.ndarray,
+        block_slice: slice,
+        total_column: int,
+        source_group_weights: np.ndarray | None,
+        row_mask: np.ndarray | None = None,
+    ) -> np.ndarray:
+        values = np.asarray(values, dtype=float)
+        total_density = self.rows[block_slice, total_column]
+        if row_mask is not None:
+            total_density = total_density[row_mask]
+        if not self.has_source_groups or source_group_weights is None:
+            return _interp_unique_array(values, x, total_density)
+        group_density = self.source_group_mu if total_column == 4 else self.source_group_phi
+        assert group_density is not None
+        weights = np.asarray(source_group_weights, dtype=float)
+        if weights.ndim == 1:
+            weights = np.broadcast_to(weights, (len(values), len(SOURCE_GROUP_NAMES)))
+        out = np.zeros_like(values)
+        for group in range(len(SOURCE_GROUP_NAMES)):
+            density = group_density[block_slice, group]
+            if row_mask is not None:
+                density = density[row_mask]
+            out += weights[:, group] * _interp_unique_array(values, x, density)
+        return out
 
     def _nearest_pair(self, dl_pc: float, ds_pc: float) -> np.ndarray:
         target = np.array([ds_pc, dl_pc])
@@ -342,10 +486,11 @@ class DistanceMarginalizationGrid:
     pi_rel: np.ndarray
     weights: np.ndarray
     component_fractions: np.ndarray
+    source_group_weights: np.ndarray
     pair_indices: np.ndarray
 
 
-class HistogramDensity(DensityModel):
+class HistogramTables:
     """Histogram-backed Galactic density model.
 
     This reads the current `PreRunner` outputs: `mass.dat`, `rho.dat`, and
@@ -375,22 +520,60 @@ class HistogramDensity(DensityModel):
         rho_path: str | Path,
         murel_path: str | Path,
         *,
-        require_source_selection: bool = True,
-    ) -> "HistogramDensity":
-        return cls(
+        source_evidence: SourceEvidenceGrid | None = None,
+    ) -> "HistogramTables":
+        density = cls(
             mass=MassHistogram.from_file(mass_path),
-            distance=DistanceDensityTable.from_file(rho_path, require_source_selection=require_source_selection),
+            distance=DistanceDensityTable.from_file(rho_path),
             murel=MurelHistogram.from_file(murel_path),
         )
+        return density.with_source_evidence(source_evidence) if source_evidence is not None else density
 
     @classmethod
-    def from_pre_run(cls, pre_run_result, *, require_source_selection: bool = True) -> "HistogramDensity":
+    def from_pre_run(
+        cls,
+        pre_run_result,
+        *,
+        source_evidence: SourceEvidenceGrid | None = None,
+    ) -> "HistogramTables":
+        if source_evidence is None:
+            path = getattr(pre_run_result, "source_evidence_path", None)
+            if path is not None and Path(path).is_file():
+                source_evidence = SourceEvidenceGrid.load_npz(path)
         return cls.from_paths(
             pre_run_result.mass_path,
             pre_run_result.rho_path,
             pre_run_result.murel_path,
-            require_source_selection=require_source_selection,
+            source_evidence=source_evidence,
         )
+
+    def with_source_evidence(self, evidence: SourceEvidenceGrid) -> "HistogramTables":
+        """Return a copy with ``p(DS)`` rebuilt from source-data evidence.
+
+        This uses the unselected geometric factor ``nMS * 1e-6 * DS**2`` from
+        ``rho.dat`` and is therefore equivalent to genulens' forward-source
+        grid. It does not reuse the legacy no-cut ``rhoD_S`` fallback, which
+        carries a ``gammaDs`` distance weighting.
+        """
+
+        return HistogramTables(
+            mass=self.mass,
+            distance=self.distance.with_source_evidence(evidence),
+            murel=self.murel,
+            component_names=self.component_names,
+        )
+
+    def with_genulens_source_evidence(
+        self,
+        builder: "GenulensSourceEvidenceBuilder",
+    ) -> "HistogramTables":
+        """Build and apply genulens source-data evidence on this grid."""
+
+        evidence = builder.build(
+            self.distance.distance_pc,
+            component_indices=range(self.distance.source_density_by_component.shape[1]),
+        )
+        return self.with_source_evidence(evidence)
 
     def log_density(self, ML: float, DL: float, DS: float, mu_N: float, mu_E: float) -> float:
         density = self.density(ML, DL, DS, mu_N, mu_E)
@@ -405,6 +588,129 @@ class HistogramDensity(DensityModel):
             return 0.0
         phi = atan2(mu_E, mu_N)
         return self.density_mu_phi(ML, DL, DS, mu, phi) / mu
+
+    def cmd_joint_density(
+        self,
+        ML: float,
+        DL: float,
+        DS: float,
+        mu_N: float,
+        mu_E: float,
+        *,
+        cmd_prior: CmdPriorTable,
+        reference_magnitude: float,
+        color: float,
+        offset_provider: OffsetProvider,
+    ) -> float:
+        """Joint density in event variables and apparent CMD coordinates.
+
+        The result is a density with respect to
+        ``dML dDL dDS dmu_N dmu_E dm_reference dcolor``.  It is evaluated at
+        the photometry represented by the current MCMC state; no photometric
+        measurement likelihood is assumed here.
+        """
+
+        mu = hypot(mu_N, mu_E)
+        if mu <= 0.0 or DS <= DL or self.distance.source_norm <= 0.0:
+            return 0.0
+        component_values = self._cmd_component_density(
+            DS,
+            cmd_prior,
+            reference_magnitude,
+            color,
+            offset_provider,
+        )
+        source_density = float(component_values.sum())
+        if source_density <= 0.0:
+            return 0.0
+        group_values = np.bincount(
+            SOURCE_GROUP_BY_COMPONENT,
+            weights=component_values,
+            minlength=len(SOURCE_GROUP_NAMES),
+        )
+        group_weights = group_values / source_density
+        phi = atan2(mu_E, mu_N)
+        p_mass = self.mass_density_given_dl(ML, DL)
+        p_dl = self.distance.lens_pdf_given_source(DL, DS)
+        p_mu, p_phi = self.murel.densities(DL, DS, mu, phi, group_weights)
+        return 1000.0 * p_mass * p_dl * source_density * p_mu * p_phi / mu
+
+    def log_cmd_joint_density(self, *args, **kwargs) -> float:
+        density = self.cmd_joint_density(*args, **kwargs)
+        if density <= 0.0 or not isfinite(density):
+            return float("-inf")
+        return log(density)
+
+    def cmd_joint_density_from_fluxes(
+        self,
+        ML: float,
+        DL: float,
+        DS: float,
+        mu_N: float,
+        mu_E: float,
+        *,
+        cmd_prior: CmdPriorTable,
+        flux_blue: float,
+        flux_red: float,
+        zero_point_blue: float,
+        zero_point_red: float,
+        offset_provider: OffsetProvider,
+    ) -> float:
+        """CMD joint density in two source-flux parameters.
+
+        ``cmd_prior.coordinates`` defines the blue and red bands. The CMD
+        density is transformed from magnitude-colour coordinates with the
+        required flux Jacobian.
+        """
+
+        reference, color = cmd_prior.coordinates.apparent_from_fluxes(
+            flux_blue,
+            flux_red,
+            zero_point_blue=zero_point_blue,
+            zero_point_red=zero_point_red,
+        )
+        density = self.cmd_joint_density(
+            ML,
+            DL,
+            DS,
+            mu_N,
+            mu_E,
+            cmd_prior=cmd_prior,
+            reference_magnitude=reference,
+            color=color,
+            offset_provider=offset_provider,
+        )
+        log_jacobian = cmd_prior.coordinates.log_flux_jacobian(flux_blue, flux_red)
+        return float(density * np.exp(log_jacobian)) if np.isfinite(log_jacobian) else 0.0
+
+    def _cmd_component_density(
+        self,
+        ds_kpc: float,
+        cmd_prior: CmdPriorTable,
+        reference_magnitude: float,
+        color: float,
+        offset_provider: OffsetProvider,
+    ) -> np.ndarray:
+        values = np.zeros(self.distance.source_density_by_component.shape[1], dtype=float)
+        for component in range(len(values)):
+            base = np.interp(
+                ds_kpc * 1000.0,
+                self.distance.distance_pc,
+                self.distance.source_density_by_component[:, component],
+                left=0.0,
+                right=0.0,
+            )
+            if base <= 0.0:
+                continue
+            photometric_density = cmd_prior.density(
+                component,
+                reference_magnitude,
+                color,
+                distance_pc=ds_kpc * 1000.0,
+                magnitude_offsets=offset_provider(component, ds_kpc * 1000.0),
+            )
+            values[component] = 1000.0 * base * photometric_density / self.distance.source_norm
+        return values
 
     def density_array(
         self,
@@ -423,7 +729,9 @@ class HistogramDensity(DensityModel):
         p_dl = self.distance.lens_pdf_given_source_array(DL, DS)
         p_ds = self.distance.source_pdf_array(DS)
         pair_indices = np.where(DS > DL, self.murel.nearest_pair_indices(DL, DS), -1)
-        p_mu, p_phi = self.murel.densities_for_pair_indices(pair_indices, mu, phi)
+        p_mu, p_phi = self.murel.densities_for_pair_indices(
+            pair_indices, mu, phi, self.distance.source_group_weights_array(DS)
+        )
         density = p_mass * p_dl * p_ds * p_mu * p_phi
         return np.where(mu > 0.0, density / mu, 0.0)
 
@@ -442,12 +750,12 @@ class HistogramDensity(DensityModel):
 
     def density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> float:
         """Return density with respect to dML dDL dDS dmu dphi. Distances in kpc."""
-        if mass <= 0.0 or dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
-            return 0.0
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
-        p_mu, p_phi = self.murel.densities(dl_kpc, ds_kpc, mu, phi)
+        p_mu, p_phi = self.murel.densities(
+            dl_kpc, ds_kpc, mu, phi, self.distance.source_group_weights(ds_kpc)
+        )
         return p_mass * p_dl * p_ds * p_mu * p_phi
 
     def log_density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> float:
@@ -462,7 +770,7 @@ class HistogramDensity(DensityModel):
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
-        p_mu = self.murel.mu_density(dl_kpc, ds_kpc, mu)
+        p_mu = self.murel.mu_density(dl_kpc, ds_kpc, mu, self.distance.source_group_weights(ds_kpc))
         return p_mass * p_dl * p_ds * p_mu
 
     def log_density_mu(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float) -> float:
@@ -488,7 +796,7 @@ class HistogramDensity(DensityModel):
         mass = theta_e * theta_e / (KAPPA * safe_pi_rel)
         jac = 2.0 * theta_e / (KAPPA * safe_pi_rel)
         p_mass = self._mass_density_grid(mass, grid.component_fractions)
-        p_mu = self.murel.mu_density_for_pair_indices(grid.pair_indices, mu)
+        p_mu = self.murel.mu_density_for_pair_indices(grid.pair_indices, mu, grid.source_group_weights)
         integrand = grid.weights * p_mass * p_mu * jac
         if include_event_rate:
             integrand *= grid.dl * grid.dl * theta_e * mu
@@ -560,6 +868,11 @@ class HistogramDensity(DensityModel):
             component_fractions_1d[:, None, :],
             dl.shape + (component_fractions_1d.shape[1],),
         )
+        source_group_weights_1d = self.distance.source_group_weights_array(distances)
+        source_group_weights = np.broadcast_to(
+            source_group_weights_1d[None, :, :],
+            dl.shape + (source_group_weights_1d.shape[1],),
+        )
         pair_indices = np.where(valid, self.murel.nearest_pair_indices(dl, ds), -1)
         return DistanceMarginalizationGrid(
             dl=dl,
@@ -568,6 +881,7 @@ class HistogramDensity(DensityModel):
             pi_rel=pi_rel,
             weights=weights,
             component_fractions=component_fractions,
+            source_group_weights=source_group_weights,
             pair_indices=pair_indices,
         )
 
@@ -577,13 +891,10 @@ class HistogramDensity(DensityModel):
         log_mass = np.zeros_like(mass, dtype=float)
         log_mass[positive] = np.log10(mass[positive])
         for i in range(self.mass.pdf_mass_by_component.shape[1]):
-            out[..., i] = np.interp(
-                log_mass,
-                self.mass.log_mass,
-                self.mass.pdf_mass_by_component[:, i],
-                left=0.0,
-                right=0.0,
-            )
+            out[..., i] = np.vectorize(
+                lambda value: _interp_mass_tail(value, self.mass.log_mass, self.mass.pdf_mass_by_component[:, i]),
+                otypes=[float],
+            )(log_mass)
         out[~positive, :] = 0.0
         return np.sum(out * component_fractions, axis=-1)
 
@@ -704,110 +1015,17 @@ def _cumulative_trapezoid(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return cumulative
 
 
-def _tail_rates(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Return robust exponential decay rates (units: inverse ``x``)."""
-    positive = np.flatnonzero(y > 0.0)
-    if len(positive) < 2:
-        return 1.0, 1.0
-    left_idx, right_idx = positive[:3], positive[-3:]
-    left_step = max(float(np.median(np.diff(x[left_idx]))), 1e-12)
-    right_step = max(float(np.median(np.diff(x[right_idx]))), 1e-12)
-    left_slope = np.polyfit(x[left_idx], np.log(y[left_idx]), 1)[0]
-    right_slope = np.polyfit(x[right_idx], np.log(y[right_idx]), 1)[0]
-    left = np.clip(left_slope, 1.0 / (3.0 * left_step), 5.0 / left_step)
-    right = np.clip(-right_slope, 1.0 / (3.0 * right_step), 5.0 / right_step)
-    return float(left), float(right)
-
-
-def _positive_support(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    positive = np.flatnonzero(y > 0.0)
-    if len(positive) == 0:
-        return x[:0], y[:0]
-    return x[positive[0] : positive[-1] + 1], y[positive[0] : positive[-1] + 1]
-
-
-def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> float:
+def _interp_unique(value: float, x: Iterable[float], y: Iterable[float]) -> float:
     x_arr = np.asarray(list(x), dtype=float)
     y_arr = np.asarray(list(y), dtype=float)
-    if len(x_arr) == 0 or (lower is not None and value <= lower):
+    if len(x_arr) == 0:
         return 0.0
     order = np.argsort(x_arr)
     x_sorted = x_arr[order]
     y_sorted = y_arr[order]
     unique_x, unique_idx = np.unique(x_sorted, return_index=True)
     unique_y = y_sorted[unique_idx]
-    unique_x, unique_y = _positive_support(unique_x, unique_y)
-    if len(unique_x) == 0:
-        return 0.0
-    left_rate, right_rate = _tail_rates(unique_x, unique_y)
-    if value < unique_x[0]:
-        return float(unique_y[0] * np.exp(-left_rate * (unique_x[0] - value)))
-    if value > unique_x[-1]:
-        return float(unique_y[-1] * np.exp(-right_rate * (value - unique_x[-1])))
-    return float(np.interp(value, unique_x, unique_y))
-
-
-def _interp_mass_tail(value: float, x: Iterable[float], y: Iterable[float]) -> float:
-    x_arr = np.asarray(list(x), dtype=float)
-    y_arr = np.asarray(list(y), dtype=float)
-    support = y_arr > 0.0
-    if not np.any(support):
-        return 0.0
-    x_arr, y_arr = x_arr[support], y_arr[support]
-    left_rate, right_rate = _tail_rates(x_arr, y_arr)
-    # dM = ln(10) * 10**log10(M) dlog10(M): the upper tail must beat
-    # ln(10) to remain integrable in physical mass.
-    right_rate = max(right_rate, np.log(10.0) + 1e-12)
-    if value < x_arr[0]:
-        return float(y_arr[0] * np.exp(-left_rate * (x_arr[0] - value)))
-    if value > x_arr[-1]:
-        return float(y_arr[-1] * np.exp(-right_rate * (value - x_arr[-1])))
-    return float(np.interp(value, x_arr, y_arr))
-
-
-def _interp_unique(value: float, x: Iterable[float], y: Iterable[float]) -> float:
-    """Periodic-angle helper: unlike positive PDFs, phi has no tail."""
-    x_arr = np.asarray(list(x), dtype=float)
-    y_arr = np.asarray(list(y), dtype=float)
-    if len(x_arr) == 0:
-        return 0.0
-    order = np.argsort(x_arr)
-    return float(np.interp(value, x_arr[order], y_arr[order], left=0.0, right=0.0))
-
-
-def _integral_with_tails(
-    x: np.ndarray, y: np.ndarray, *, lower: float | None, upper: float | None = None, measure: np.ndarray | None = None
-) -> float:
-    """Integral of a linearly interpolated positive table plus its tails."""
-    if len(x) == 0:
-        return 0.0
-    # Mass tables are parameterised by log10(M), but their PDF is dM.
-    if measure is not None:
-        support = y > 0.0
-        if not np.any(support):
-            return 0.0
-        x, y, measure = x[support], y[support], measure[support]
-        interior = _trapz(y, measure)
-        left_rate, right_rate = _tail_rates(x, y)
-        ln10 = np.log(10.0)
-        left = y[0] * ln10 * 10.0**x[0] / (left_rate + ln10)
-        right_rate = max(right_rate, ln10 + 1e-12)
-        right = y[-1] * ln10 * 10.0**x[-1] / (right_rate - ln10)
-        return float(interior + left + right)
-    x, y = _positive_support(x, y)
-    if len(x) == 0:
-        return 0.0
-    left_rate, right_rate = _tail_rates(x, y)
-    lower_limit = 0.0 if lower is None else lower
-    left = y[0] / left_rate * (1.0 - np.exp(-left_rate * max(x[0] - lower_limit, 0.0)))
-    interior = _trapz(y, x)
-    if upper is None:
-        right = y[-1] / right_rate
-    elif upper <= x[-1]:
-        return _integral_until(x, y, upper) + left
-    else:
-        right = y[-1] / right_rate * (1.0 - np.exp(-right_rate * (upper - x[-1])))
-    return float(left + interior + right)
+    return float(np.interp(value, unique_x, unique_y, left=0.0, right=0.0))
 
 
 def _interp_unique_array(value: np.ndarray, x: Iterable[float], y: Iterable[float]) -> np.ndarray:
@@ -821,6 +1039,85 @@ def _interp_unique_array(value: np.ndarray, x: Iterable[float], y: Iterable[floa
     unique_x, unique_idx = np.unique(x_sorted, return_index=True)
     unique_y = y_sorted[unique_idx]
     return np.interp(value, unique_x, unique_y, left=0.0, right=0.0)
+
+
+def _tail_rates(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Return robust exponential decay rates (units: inverse ``x``)."""
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) < 2:
+        return 1.0, 1.0
+    left_idx, right_idx = positive[:3], positive[-3:]
+    left_step = max(float(np.median(np.diff(x[left_idx]))), 1e-12)
+    right_step = max(float(np.median(np.diff(x[right_idx]))), 1e-12)
+    left = np.clip(np.polyfit(x[left_idx], np.log(y[left_idx]), 1)[0], 1.0 / (3.0 * left_step), 5.0 / left_step)
+    right = np.clip(-np.polyfit(x[right_idx], np.log(y[right_idx]), 1)[0], 1.0 / (3.0 * right_step), 5.0 / right_step)
+    return float(left), float(right)
+
+
+def _positive_support(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) == 0:
+        return x[:0], y[:0]
+    return x[positive[0] : positive[-1] + 1], y[positive[0] : positive[-1] + 1]
+
+
+def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> float:
+    return float(_interp_positive_tail_array(np.asarray(value), x, y, lower=lower))
+
+
+def _interp_positive_tail_array(value: np.ndarray, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> np.ndarray:
+    x_arr, y_arr = np.asarray(list(x), dtype=float), np.asarray(list(y), dtype=float)
+    if len(x_arr) == 0:
+        return np.zeros_like(value, dtype=float)
+    x_arr, y_arr = _positive_support(x_arr, y_arr)
+    if len(x_arr) == 0:
+        return np.zeros_like(value, dtype=float)
+    left_rate, right_rate = _tail_rates(x_arr, y_arr)
+    values = np.asarray(value, dtype=float)
+    result = np.interp(values, x_arr, y_arr)
+    result = np.where(values < x_arr[0], y_arr[0] * np.exp(-left_rate * (x_arr[0] - values)), result)
+    result = np.where(values > x_arr[-1], y_arr[-1] * np.exp(-right_rate * (values - x_arr[-1])), result)
+    return np.where(values > lower, result, 0.0) if lower is not None else result
+
+
+def _interp_mass_tail(value: float, x: Iterable[float], y: Iterable[float]) -> float:
+    x_arr, y_arr = np.asarray(list(x), dtype=float), np.asarray(list(y), dtype=float)
+    support = y_arr > 0.0
+    if not np.any(support):
+        return 0.0
+    x_arr, y_arr = x_arr[support], y_arr[support]
+    left_rate, right_rate = _tail_rates(x_arr, y_arr)
+    right_rate = max(right_rate, np.log(10.0) + 1e-12)
+    if value < x_arr[0]:
+        return float(y_arr[0] * np.exp(-left_rate * (x_arr[0] - value)))
+    if value > x_arr[-1]:
+        return float(y_arr[-1] * np.exp(-right_rate * (value - x_arr[-1])))
+    return float(np.interp(value, x_arr, y_arr))
+
+
+def _integral_with_tails(x: np.ndarray, y: np.ndarray, *, lower: float | None, upper: float | None = None, measure: np.ndarray | None = None) -> float:
+    if len(x) == 0:
+        return 0.0
+    if measure is not None:
+        support = y > 0.0
+        if not np.any(support):
+            return 0.0
+        x, y, measure = x[support], y[support], measure[support]
+        left_rate, right_rate = _tail_rates(x, y)
+        ln10 = np.log(10.0)
+        return float(_trapz(y, measure) + y[0] * ln10 * 10.0**x[0] / (left_rate + ln10) + y[-1] * ln10 * 10.0**x[-1] / (max(right_rate, ln10 + 1e-12) - ln10))
+    x, y = _positive_support(x, y)
+    if len(x) == 0:
+        return 0.0
+    left_rate, right_rate = _tail_rates(x, y)
+    left = y[0] / left_rate * (1.0 - np.exp(-left_rate * max(x[0] - (0.0 if lower is None else lower), 0.0)))
+    if upper is None:
+        return float(left + _trapz(y, x) + y[-1] / right_rate)
+    if upper <= x[0]:
+        return float(y[0] / left_rate * (np.exp(-left_rate * (x[0] - upper)) - np.exp(-left_rate * x[0]))) if upper > 0.0 else 0.0
+    if upper <= x[-1]:
+        return float(left + _integral_until(x, y, upper))
+    return float(left + _trapz(y, x) + y[-1] / right_rate * (1.0 - np.exp(-right_rate * (upper - x[-1]))))
 
 
 def _wrap_phi(phi: float) -> float:
