@@ -25,13 +25,11 @@ classifiers = [
 dependencies = [
   "astropy",
   "genulens>=2.0.0a3",
+  "jax",
   "numpy",
 ]
 
 [project.optional-dependencies]
-jax = [
-  "jax",
-]
 examples = [
   "corner",
   "emcee",

@@ -9,18 +9,22 @@ import jax.numpy as jnp
 import numpy as np
 from jax import vmap
 
-from gapmoe.density.histogram_numpy import COMPONENT_NAMES, HistogramDensity
+from gapmoe.density.histogram_tables import COMPONENT_NAMES, SOURCE_GROUP_BY_COMPONENT, SOURCE_GROUP_NAMES, HistogramTables
 from gapmoe.priors.event_rate import KAPPA
-from gapmoe.priors.event_rate_jax import jax_log_event_rate
+from gapmoe.priors.event_rate_backend import log_event_rate_backend
+from gapmoe.source_selection import CmdPriorTable, SourceEvidenceGrid
+
+
+SOURCE_GROUP_MATRIX = np.equal.outer(np.arange(len(SOURCE_GROUP_NAMES)), SOURCE_GROUP_BY_COMPONENT).astype(float)
 
 
 @dataclass(frozen=True)
-class JaxMassHistogram:
+class MassHistogram:
     log_mass: jnp.ndarray
     pdf_mass_by_component: jnp.ndarray
 
     @classmethod
-    def from_numpy(cls, density: HistogramDensity) -> "JaxMassHistogram":
+    def from_tables(cls, density: HistogramTables) -> "MassHistogram":
         return cls(
             log_mass=jnp.asarray(density.mass.log_mass),
             pdf_mass_by_component=jnp.asarray(density.mass.pdf_mass_by_component),
@@ -38,20 +42,24 @@ class JaxMassHistogram:
 
 
 @dataclass(frozen=True)
-class JaxDistanceDensityTable:
+class DistanceDensityTable:
     # distance_pc: raw distance grid from rho.dat, in pc.
     distance_pc: jnp.ndarray
     lens_density_by_component: jnp.ndarray
+    base_source_density_by_component: jnp.ndarray
+    source_density_by_component: jnp.ndarray
     source_density: jnp.ndarray
     lens_density_total: jnp.ndarray
     lens_cumulative_integral: jnp.ndarray
     source_norm: float
 
     @classmethod
-    def from_numpy(cls, density: HistogramDensity) -> "JaxDistanceDensityTable":
+    def from_tables(cls, density: HistogramTables) -> "DistanceDensityTable":
         return cls(
             distance_pc=jnp.asarray(density.distance.distance_pc),
             lens_density_by_component=jnp.asarray(density.distance.lens_density_by_component),
+            base_source_density_by_component=jnp.asarray(density.distance.base_source_density_by_component),
+            source_density_by_component=jnp.asarray(density.distance.source_density_by_component),
             source_density=jnp.asarray(density.distance.source_density),
             lens_density_total=jnp.asarray(density.distance.lens_density_total),
             lens_cumulative_integral=jnp.asarray(density.distance.lens_cumulative_integral),
@@ -98,9 +106,110 @@ class JaxDistanceDensityTable:
         total = jnp.sum(vals)
         return jnp.where(total > 0.0, vals / total, jnp.zeros_like(vals))
 
+    def source_group_weights(self, ds_kpc: float) -> jnp.ndarray:
+        values = self.source_component_values(ds_kpc)
+        weights = jnp.asarray(SOURCE_GROUP_MATRIX) @ values
+        total = jnp.sum(weights)
+        return jnp.where(total > 0.0, weights / total, jnp.zeros_like(weights))
+
+    def source_component_values(self, ds_kpc: float) -> jnp.ndarray:
+        values = jnp.array(
+            [
+                jnp.interp(
+                    ds_kpc * 1000.0,
+                    self.distance_pc,
+                    self.source_density_by_component[:, i],
+                    left=0.0,
+                    right=0.0,
+                )
+                for i in range(self.source_density_by_component.shape[1])
+            ]
+        )
+        return values
+
 
 @dataclass(frozen=True)
-class JaxMurelHistogram:
+class CmdPriorEvaluator:
+    """JAX representation of a component-conditional intrinsic CMD table."""
+
+    reference_centers: jnp.ndarray
+    color_centers: jnp.ndarray
+    density_by_component: jnp.ndarray
+    component_to_column: jnp.ndarray
+
+    @classmethod
+    def from_table(cls, table: CmdPriorTable, *, n_components: int = 11) -> "CmdPriorEvaluator":
+        component_indices = (
+            np.arange(table.density_by_component.shape[0])
+            if table.component_indices is None
+            else np.asarray(table.component_indices, dtype=int)
+        )
+        if np.any(component_indices < 0) or np.any(component_indices >= n_components):
+            raise ValueError("CMD table component indices are incompatible with this Galactic density")
+        component_to_column = np.full(n_components, -1, dtype=int)
+        component_to_column[component_indices] = np.arange(len(component_indices), dtype=int)
+        return cls(
+            reference_centers=jnp.asarray(0.5 * (table.reference_edges[:-1] + table.reference_edges[1:])),
+            color_centers=jnp.asarray(0.5 * (table.color_edges[:-1] + table.color_edges[1:])),
+            density_by_component=jnp.asarray(table.density_by_component),
+            component_to_column=jnp.asarray(component_to_column),
+        )
+
+    def density_all_components(
+        self,
+        reference_magnitude: float,
+        color: float,
+        magnitude_offsets: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Evaluate apparent CMD density for every Galactic source component.
+
+        ``magnitude_offsets`` has shape ``(3,)`` for component-independent
+        offsets or ``(n_component, 3)`` for component-specific values ordered
+        as ``(reference, blue, red)``.
+        """
+
+        offsets = jnp.asarray(magnitude_offsets)
+        if offsets.ndim == 1:
+            offsets = jnp.broadcast_to(offsets, (self.component_to_column.shape[0], 3))
+        if offsets.ndim != 2 or offsets.shape != (self.component_to_column.shape[0], 3):
+            raise ValueError("magnitude_offsets must have shape (3,) or (n_component, 3)")
+        absolute_reference = reference_magnitude - offsets[:, 0]
+        absolute_color = color - (offsets[:, 1] - offsets[:, 2])
+        return self._bilinear_all_components(absolute_reference, absolute_color)
+
+    def _bilinear_all_components(self, reference: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+        n_reference = self.reference_centers.shape[0]
+        n_color = self.color_centers.shape[0]
+        i1 = jnp.clip(jnp.searchsorted(self.reference_centers, reference, side="right"), 0, n_reference - 1)
+        j1 = jnp.clip(jnp.searchsorted(self.color_centers, color, side="right"), 0, n_color - 1)
+        i0 = jnp.maximum(0, i1 - 1)
+        j0 = jnp.maximum(0, j1 - 1)
+        x0, x1 = self.reference_centers[i0], self.reference_centers[i1]
+        y0, y1 = self.color_centers[j0], self.color_centers[j1]
+        tx = jnp.where(i0 == i1, 0.0, (reference - x0) / (x1 - x0))
+        ty = jnp.where(j0 == j1, 0.0, (color - y0) / (y1 - y0))
+        columns = self.component_to_column
+        valid_component = columns >= 0
+        safe_columns = jnp.maximum(columns, 0)
+        component = jnp.arange(self.component_to_column.shape[0])
+        table = self.density_by_component[safe_columns]
+        value = (
+            (1.0 - tx) * (1.0 - ty) * table[component, i0, j0]
+            + tx * (1.0 - ty) * table[component, i1, j0]
+            + (1.0 - tx) * ty * table[component, i0, j1]
+            + tx * ty * table[component, i1, j1]
+        )
+        in_range = (
+            (reference >= self.reference_centers[0])
+            & (reference <= self.reference_centers[-1])
+            & (color >= self.color_centers[0])
+            & (color <= self.color_centers[-1])
+        )
+        return jnp.where(valid_component & in_range, value, 0.0)
+
+
+@dataclass(frozen=True)
+class MurelHistogram:
     # pairs: raw (DS, DL) block centers from murel.dat, in pc.
     pairs: jnp.ndarray
     pair_scale: jnp.ndarray
@@ -110,6 +219,8 @@ class JaxMurelHistogram:
     phi_x: jnp.ndarray
     phi_y: jnp.ndarray
     phi_len: jnp.ndarray
+    source_mu_y: jnp.ndarray
+    source_phi_y: jnp.ndarray
     ds_values: jnp.ndarray
     dl_values: jnp.ndarray
     grid_index: jnp.ndarray
@@ -117,14 +228,16 @@ class JaxMurelHistogram:
     grid: dict[str, float]
 
     @classmethod
-    def from_numpy(
+    def from_tables(
         cls,
-        density: HistogramDensity,
+        density: HistogramTables,
         *,
         interpolation: Literal["nearest", "bilinear"] = "nearest",
-    ) -> "JaxMurelHistogram":
+    ) -> "MurelHistogram":
         if interpolation not in {"nearest", "bilinear"}:
             raise ValueError("murel interpolation must be 'nearest' or 'bilinear'")
+        if density.murel.has_source_groups and interpolation == "bilinear":
+            raise ValueError("bilinear interpolation is not yet available for source-group murel histograms")
 
         blocks = []
         for pair in density.murel.pairs:
@@ -133,13 +246,24 @@ class JaxMurelHistogram:
             block = density.murel.rows[block_slice]
             mu_x, mu_y = _unique_xy(block[block[:, 2] > 0.0, 2], block[block[:, 2] > 0.0, 4])
             phi_x, phi_y = _unique_xy(block[:, 3], block[:, 5])
-            blocks.append((mu_x, mu_y, phi_x, phi_y))
+            valid_mu = block[:, 2] > 0.0
+            if density.murel.has_source_groups:
+                assert density.murel.source_group_mu is not None
+                assert density.murel.source_group_phi is not None
+                mu_group = density.murel.source_group_mu[block_slice][valid_mu]
+                phi_group = density.murel.source_group_phi[block_slice]
+            else:
+                mu_group = np.repeat(mu_y[:, None], len(SOURCE_GROUP_NAMES), axis=1)
+                phi_group = np.repeat(phi_y[:, None], len(SOURCE_GROUP_NAMES), axis=1)
+            blocks.append((mu_x, mu_y, phi_x, phi_y, mu_group, phi_group))
 
         max_mu_len = max(2, max((len(block[0]) for block in blocks), default=1))
         max_phi_len = max(2, max((len(block[2]) for block in blocks), default=1))
 
         mu_x, mu_y, mu_len = _pad_blocks([(block[0], block[1]) for block in blocks], max_mu_len)
         phi_x, phi_y, phi_len = _pad_blocks([(block[2], block[3]) for block in blocks], max_phi_len)
+        source_mu_y = _pad_group_blocks([block[4] for block in blocks], max_mu_len)
+        source_phi_y = _pad_group_blocks([block[5] for block in blocks], max_phi_len)
         grid_index = _make_pair_grid_index(density.murel.pairs, density.murel.ds_values, density.murel.dl_values)
 
         return cls(
@@ -151,6 +275,8 @@ class JaxMurelHistogram:
             phi_x=jnp.asarray(phi_x),
             phi_y=jnp.asarray(phi_y),
             phi_len=jnp.asarray(phi_len),
+            source_mu_y=jnp.asarray(source_mu_y),
+            source_phi_y=jnp.asarray(source_phi_y),
             ds_values=jnp.asarray(density.murel.ds_values),
             dl_values=jnp.asarray(density.murel.dl_values),
             grid_index=jnp.asarray(grid_index),
@@ -158,34 +284,53 @@ class JaxMurelHistogram:
             grid=dict(density.murel.grid),
         )
 
-    def densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def densities(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        mu: float,
+        phi: float,
+        source_group_weights: jnp.ndarray | None = None,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        if source_group_weights is None:
+            source_group_weights = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0])
         if self.interpolation == "bilinear":
             p_mu, p_phi = self._bilinear_densities(dl_kpc, ds_kpc, mu, phi)
             valid = ds_kpc > dl_kpc
             return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
 
         idx = self._nearest_pair_index(dl_kpc, ds_kpc)
-        p_mu = _interp_padded(mu, self.mu_x[idx], self.mu_y[idx], self.mu_len[idx])
-        p_phi = _interp_padded(_wrap_phi(phi), self.phi_x[idx], self.phi_y[idx], self.phi_len[idx])
+        p_mu = _interp_padded_group(mu, self.mu_x[idx], self.source_mu_y[idx], self.mu_len[idx], source_group_weights)
+        p_phi = _interp_padded_group(
+            _wrap_phi(phi), self.phi_x[idx], self.source_phi_y[idx], self.phi_len[idx], source_group_weights
+        )
         valid = ds_kpc > dl_kpc
         return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
 
-    def mu_density(self, dl_kpc: float, ds_kpc: float, mu: float) -> jnp.ndarray:
+    def mu_density(
+        self, dl_kpc: float, ds_kpc: float, mu: float, source_group_weights: jnp.ndarray | None = None
+    ) -> jnp.ndarray:
+        if source_group_weights is None:
+            source_group_weights = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0])
         if self.interpolation == "bilinear":
             p_mu = self._bilinear_mu_density(dl_kpc, ds_kpc, mu)
             return jnp.where(ds_kpc > dl_kpc, p_mu, 0.0)
 
         idx = self._nearest_pair_index(dl_kpc, ds_kpc)
-        p_mu = _interp_padded(mu, self.mu_x[idx], self.mu_y[idx], self.mu_len[idx])
+        p_mu = _interp_padded_group(mu, self.mu_x[idx], self.source_mu_y[idx], self.mu_len[idx], source_group_weights)
         return jnp.where(ds_kpc > dl_kpc, p_mu, 0.0)
 
-    def mu_density_for_pair_indices(self, pair_indices: jnp.ndarray, mu: float) -> jnp.ndarray:
+    def mu_density_for_pair_indices(
+        self, pair_indices: jnp.ndarray, mu: float, source_group_weights: jnp.ndarray
+    ) -> jnp.ndarray:
         safe_indices = jnp.maximum(pair_indices, 0)
 
-        def interp_one(idx):
-            return _interp_padded(mu, self.mu_x[idx], self.mu_y[idx], self.mu_len[idx])
+        flat_weights = source_group_weights.reshape((-1, source_group_weights.shape[-1]))
 
-        values = vmap(interp_one)(safe_indices.ravel()).reshape(pair_indices.shape)
+        def interp_one(idx, weights):
+            return _interp_padded_group(mu, self.mu_x[idx], self.source_mu_y[idx], self.mu_len[idx], weights)
+
+        values = vmap(interp_one)(safe_indices.ravel(), flat_weights).reshape(pair_indices.shape)
         return jnp.where(pair_indices >= 0, values, 0.0)
 
     def _nearest_pair_index(self, dl_kpc: float, ds_kpc: float) -> jnp.ndarray:
@@ -281,17 +426,18 @@ class JaxMurelHistogram:
 
 
 @dataclass(frozen=True)
-class JaxDistanceMarginalizationGrid:
+class DistanceMarginalizationGrid:
     dl: jnp.ndarray
     ds: jnp.ndarray
     valid: jnp.ndarray
     pi_rel: jnp.ndarray
     weights: jnp.ndarray
     component_fractions: jnp.ndarray
+    source_group_weights: jnp.ndarray
     pair_indices: jnp.ndarray
 
 
-class JaxHistogramDensity:
+class HistogramDensity:
     """JAX histogram-backed Galactic density model.
 
     This backend uses the same files and probability semantics as
@@ -302,9 +448,9 @@ class JaxHistogramDensity:
 
     def __init__(
         self,
-        mass: JaxMassHistogram,
-        distance: JaxDistanceDensityTable,
-        murel: JaxMurelHistogram,
+        mass: MassHistogram,
+        distance: DistanceDensityTable,
+        murel: MurelHistogram,
         *,
         component_names: Sequence[str] = COMPONENT_NAMES,
     ) -> None:
@@ -321,15 +467,15 @@ class JaxHistogramDensity:
         rho_path: str | Path,
         murel_path: str | Path,
         *,
-        require_source_selection: bool = True,
         murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
-    ) -> "JaxHistogramDensity":
-        return cls.from_numpy(
-            HistogramDensity.from_paths(
+        source_evidence: SourceEvidenceGrid | None = None,
+    ) -> "HistogramDensity":
+        return cls.from_tables(
+            HistogramTables.from_paths(
                 mass_path,
                 rho_path,
                 murel_path,
-                require_source_selection=require_source_selection,
+                source_evidence=source_evidence,
             ),
             murel_interpolation=murel_interpolation,
         )
@@ -339,28 +485,32 @@ class JaxHistogramDensity:
         cls,
         pre_run_result,
         *,
-        require_source_selection: bool = True,
         murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
-    ) -> "JaxHistogramDensity":
+        source_evidence: SourceEvidenceGrid | None = None,
+    ) -> "HistogramDensity":
+        if source_evidence is None:
+            path = getattr(pre_run_result, "source_evidence_path", None)
+            if path is not None and Path(path).is_file():
+                source_evidence = SourceEvidenceGrid.load_npz(path)
         return cls.from_paths(
             pre_run_result.mass_path,
             pre_run_result.rho_path,
             pre_run_result.murel_path,
-            require_source_selection=require_source_selection,
             murel_interpolation=murel_interpolation,
+            source_evidence=source_evidence,
         )
 
     @classmethod
-    def from_numpy(
+    def from_tables(
         cls,
-        density: HistogramDensity,
+        density: HistogramTables,
         *,
         murel_interpolation: Literal["nearest", "bilinear"] = "nearest",
-    ) -> "JaxHistogramDensity":
+    ) -> "HistogramDensity":
         return cls(
-            mass=JaxMassHistogram.from_numpy(density),
-            distance=JaxDistanceDensityTable.from_numpy(density),
-            murel=JaxMurelHistogram.from_numpy(density, interpolation=murel_interpolation),
+            mass=MassHistogram.from_tables(density),
+            distance=DistanceDensityTable.from_tables(density),
+            murel=MurelHistogram.from_tables(density, interpolation=murel_interpolation),
             component_names=density.component_names,
         )
 
@@ -371,16 +521,102 @@ class JaxHistogramDensity:
         val = self.density_mu_phi(ML, DL, DS, mu, phi)
         return jnp.where(mu > 0.0, val / mu, 0.0)
 
+    def cmd_joint_density(
+        self,
+        ML: float,
+        DL: float,
+        DS: float,
+        mu_N: float,
+        mu_E: float,
+        *,
+        cmd_prior: CmdPriorEvaluator,
+        reference_magnitude: float,
+        color: float,
+        magnitude_offsets: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Joint density in event variables and apparent CMD coordinates.
+
+        ``magnitude_offsets`` is a JAX array with shape ``(3,)`` or
+        ``(n_component, 3)`` ordered as ``(reference, blue, red)``. Supplying
+        it as an array keeps the evaluator compatible with ``jax.jit``.
+        """
+
+        mu = jnp.hypot(mu_N, mu_E)
+        photometric_density = cmd_prior.density_all_components(
+            reference_magnitude,
+            color,
+            magnitude_offsets,
+        )
+        source_values = self.distance.source_component_values(DS)
+        source_norm = jnp.where(self.distance.source_norm > 0.0, self.distance.source_norm, 1.0)
+        component_values = source_values * photometric_density / source_norm
+        source_density = jnp.sum(component_values)
+        group_values = jnp.asarray(SOURCE_GROUP_MATRIX) @ component_values
+        group_weights = jnp.where(
+            source_density > 0.0,
+            group_values / source_density,
+            jnp.zeros_like(group_values),
+        )
+        phi = jnp.arctan2(mu_E, mu_N)
+        p_mass = self.mass_density_given_dl(ML, DL)
+        p_dl = self.distance.lens_pdf_given_source(DL, DS)
+        p_mu, p_phi = self.murel.densities(DL, DS, mu, phi, group_weights)
+        value = p_mass * p_dl * source_density * p_mu * p_phi / mu
+        valid = (mu > 0.0) & (DS > DL) & (self.distance.source_norm > 0.0)
+        return jnp.where(valid, value, 0.0)
+
+    def log_cmd_joint_density(self, *args, **kwargs) -> jnp.ndarray:
+        density = self.cmd_joint_density(*args, **kwargs)
+        return jnp.where(density > 0.0, jnp.log(density), -jnp.inf)
+
     def log_density(self, ML: float, DL: float, DS: float, mu_N: float, mu_E: float) -> jnp.ndarray:
         density = self.density(ML, DL, DS, mu_N, mu_E)
         return jnp.where(density > 0.0, jnp.log(density), -jnp.inf)
+
+    def log_prior(self, ML: float, DL: float, DS: float, mu_N: float, mu_E: float) -> jnp.ndarray:
+        mu = jnp.hypot(mu_N, mu_E)
+        return self.log_density(ML, DL, DS, mu_N, mu_E) + log_event_rate_backend(ML, DL, DS, mu)
+
+    def with_source_evidence(self, evidence: SourceEvidenceGrid) -> "HistogramDensity":
+        """Return a density with source evidence applied to the forward base."""
+
+        distance_pc = np.asarray(self.distance.distance_pc)
+        weights = evidence.evidence_on(distance_pc, self.distance.base_source_density_by_component.shape[1])
+        source_by_component = self.distance.base_source_density_by_component * jnp.asarray(weights)
+        source_density = jnp.sum(source_by_component, axis=1)
+        source_norm = float(_trapz_jax(source_density, self.distance.distance_pc))
+        distance = DistanceDensityTable(
+            distance_pc=self.distance.distance_pc,
+            lens_density_by_component=self.distance.lens_density_by_component,
+            base_source_density_by_component=self.distance.base_source_density_by_component,
+            source_density_by_component=source_by_component,
+            source_density=source_density,
+            lens_density_total=self.distance.lens_density_total,
+            lens_cumulative_integral=self.distance.lens_cumulative_integral,
+            source_norm=source_norm,
+        )
+        return HistogramDensity(
+            mass=self.mass,
+            distance=distance,
+            murel=self.murel,
+            component_names=self.component_names,
+        )
+
+    def with_genulens_source_evidence(self, builder) -> "HistogramDensity":
+        evidence = builder.build(
+            np.asarray(self.distance.distance_pc),
+            component_indices=range(self.distance.source_density_by_component.shape[1]),
+        )
+        return self.with_source_evidence(evidence)
 
     def density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> jnp.ndarray:
         """Return density with respect to dML dDL dDS dmu dphi. Distances in kpc."""
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
-        p_mu, p_phi = self.murel.densities(dl_kpc, ds_kpc, mu, phi)
+        p_mu, p_phi = self.murel.densities(
+            dl_kpc, ds_kpc, mu, phi, self.distance.source_group_weights(ds_kpc)
+        )
         return p_mass * p_dl * p_ds * p_mu * p_phi
 
     def log_density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> jnp.ndarray:
@@ -393,7 +629,7 @@ class JaxHistogramDensity:
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
-        p_mu = self.murel.mu_density(dl_kpc, ds_kpc, mu)
+        p_mu = self.murel.mu_density(dl_kpc, ds_kpc, mu, self.distance.source_group_weights(ds_kpc))
         return p_mass * p_dl * p_ds * p_mu
 
     def log_density_mu(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float) -> jnp.ndarray:
@@ -414,7 +650,7 @@ class JaxHistogramDensity:
         mass = theta_e * theta_e / (KAPPA * safe_pi_rel)
         jac = 2.0 * theta_e / (KAPPA * safe_pi_rel)
         p_mass = self._mass_density_grid(mass, grid.component_fractions)
-        p_mu = self.murel.mu_density_for_pair_indices(grid.pair_indices, mu)
+        p_mu = self.murel.mu_density_for_pair_indices(grid.pair_indices, mu, grid.source_group_weights)
         integrand = grid.weights * p_mass * p_mu * jac
         if include_event_rate:
             integrand = integrand * grid.dl * grid.dl * theta_e * mu
@@ -446,7 +682,7 @@ class JaxHistogramDensity:
         jac = 2.0 * theta_e / (KAPPA * safe_pi_rel)
         density = self.density_mu(mass, dl_kpc, ds_kpc, mu) * jac
         if include_event_rate:
-            density = density * jnp.exp(jax_log_event_rate(mass, dl_kpc, ds_kpc, mu))
+            density = density * jnp.exp(log_event_rate_backend(mass, dl_kpc, ds_kpc, mu))
         return jnp.where(pi_rel > 0.0, density, 0.0)
 
     def _distance_grid(self):
@@ -477,14 +713,20 @@ class JaxHistogramDensity:
             component_fractions_1d[:, None, :],
             dl.shape + (component_fractions_1d.shape[1],),
         )
+        source_group_weights_1d = vmap(self.distance.source_group_weights)(distances)
+        source_group_weights = jnp.broadcast_to(
+            source_group_weights_1d[None, :, :],
+            dl.shape + (source_group_weights_1d.shape[1],),
+        )
         pair_indices = jnp.where(valid, self.murel.nearest_pair_indices(dl, ds), -1)
-        return JaxDistanceMarginalizationGrid(
+        return DistanceMarginalizationGrid(
             dl=dl,
             ds=ds,
             valid=valid,
             pi_rel=pi_rel,
             weights=weights,
             component_fractions=component_fractions,
+            source_group_weights=source_group_weights,
             pair_indices=pair_indices,
         )
 
@@ -553,6 +795,13 @@ def _pad_blocks(blocks: list[tuple[np.ndarray, np.ndarray]], width: int) -> tupl
     return x_out, y_out, lengths
 
 
+def _pad_group_blocks(blocks: list[np.ndarray], width: int) -> np.ndarray:
+    out = np.zeros((len(blocks), width, len(SOURCE_GROUP_NAMES)), dtype=float)
+    for i, values in enumerate(blocks):
+        out[i, : len(values)] = values
+    return out
+
+
 def _make_pair_grid_index(pairs: np.ndarray, ds_values: np.ndarray, dl_values: np.ndarray) -> np.ndarray:
     grid = np.full((len(ds_values), len(dl_values)), -1, dtype=int)
     ds_lookup = {float(value): index for index, value in enumerate(ds_values)}
@@ -601,6 +850,17 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     exact_value = y[exact_idx]
     interpolated = jnp.where(exact, exact_value, interpolated)
     return jnp.where((valid_len > 0) & ~(below | above), interpolated, 0.0)
+
+
+def _interp_padded_group(
+    value: float,
+    x: jnp.ndarray,
+    y: jnp.ndarray,
+    valid_len: jnp.ndarray,
+    weights: jnp.ndarray,
+) -> jnp.ndarray:
+    values = vmap(lambda column: _interp_padded(value, x, column, valid_len), in_axes=1)(y)
+    return jnp.sum(values * weights)
 
 
 def _wrap_phi(phi: float) -> jnp.ndarray:

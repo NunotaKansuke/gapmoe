@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from gapmoe.priors.event_rate import KAPPA
 
 
-def jax_log_event_rate(ML: float, DL: float, DS: float, mu: float, kappa: float = KAPPA) -> jnp.ndarray:
+def log_event_rate_backend(ML: float, DL: float, DS: float, mu: float, kappa: float = KAPPA) -> jnp.ndarray:
     """Return log of the microlensing event-rate factor using JAX arrays.
 
     Distances are expected in kpc. For kpc distances, pi_rel[mas] = 1/DL - 1/DS.
