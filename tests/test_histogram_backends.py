@@ -6,9 +6,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gapmoe import CmdCoordinates, CmdPriorTable, GalacticModel, HistogramDensity
+from gapmoe.density import HistogramDensity
 from gapmoe.density.histogram import HistogramDensity as CompatHistogramDensity
 from gapmoe.density.histogram_tables import HistogramTables
+from gapmoe.priors.cmd import CmdGalacticModel
+from gapmoe.priors.galactic import GalacticModel
+from gapmoe.priors.mapped import MappedGalacticModel
+from gapmoe.priors.source import EventPrior5D, SourceCmdPrior
+from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "small_source_default"
@@ -25,7 +30,7 @@ def raw_point() -> tuple[float, float, float, float, float]:
     return ml, dl, ds, mu * cos(phi), mu * sin(phi)
 
 
-def test_public_histogram_imports_are_jax_backend() -> None:
+def test_histogram_import_is_jax_backend() -> None:
     assert HistogramDensity is CompatHistogramDensity
 
 
@@ -67,8 +72,6 @@ def test_distance_marginalized_theta_mu_density_is_finite(histogram_density: His
 
 def test_histogram_jits(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
-    from gapmoe import MappedGalacticModel
-
     ml, dl, ds, mu_n, mu_e = raw_point()
     numpy_log_prob = GalacticModel(histogram_density).log_prob(ml, dl, ds, mu_n, mu_e)
     jax_prior = MappedGalacticModel(histogram_density)
@@ -115,7 +118,6 @@ def test_jax_cmd_joint_density_matches_numpy_and_jits(histogram_density: Histogr
 def test_cmd_galactic_model_extracts_source_photometry_from_mcmc_state(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp
-    from gapmoe import CmdGalacticModel, EventPrior5D, SourceCmdPrior
     from gapmoe.density.histogram_backend import CmdPriorEvaluator
 
     cmd_prior = CmdPriorTable(
@@ -150,7 +152,6 @@ def test_cmd_galactic_model_extracts_source_photometry_from_mcmc_state(histogram
 def test_event_prior_5d_conditions_on_cmd_without_applying_cmd_prior(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp
-    from gapmoe import EventPrior5D, SourceCmdPrior
 
     cmd = CmdPriorTable(
         coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),

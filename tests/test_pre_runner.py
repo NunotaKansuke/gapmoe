@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from gapmoe import CmdCoordinates, CmdPriorTable, GenulensSourceModel, PreRunner, SourceSelection
-from gapmoe.source_selection import SourceEvidenceGrid
+from gapmoe.pre_runner import PreRunner
+from gapmoe.source_selection import CmdCoordinates, CmdPriorTable, GenulensSourceModel, SourceEvidenceGrid, SourceSelection
 
 
 def test_pre_runner_environment_reports_missing_tools(tmp_path: Path) -> None:
