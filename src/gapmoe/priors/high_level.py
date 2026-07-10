@@ -79,6 +79,8 @@ class IsochroneModel:
         """Build the intrinsic CMD table once from the isochrone population."""
 
         source_model = source_model or GenulensSourceModel()
+        if not source_model.bands and source_model.isochrone_table_path is None:
+            source_model = replace(source_model, bands=self.coordinates.bands)
         return replace(
             self,
             table=source_model.build_cmd_prior(

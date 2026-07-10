@@ -8,7 +8,7 @@ import pytest
 from gapmoe import Model
 from gapmoe.pre_runner import PreRunResult
 from gapmoe.priors.high_level import IsochroneModel
-from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
+from gapmoe.source_selection import CmdCoordinates, CmdPriorTable, GenulensSourceModel
 
 
 def test_model_set_requires_known_settings_and_only_invalidates_for_sightline_changes(tmp_path):
@@ -34,6 +34,22 @@ def test_isochrone_exposes_single_cmd_chart_and_optional_selection_without_build
     assert chart.coordinates.reference_band == "I"
     assert chart.coordinates.blue_band == "V"
     assert len(chart.selection.cuts) == 2
+
+
+def test_isochrone_build_selects_internal_table_from_requested_bands(monkeypatch):
+    captured = {}
+
+    def fake_build(self, coordinates, **kwargs):
+        captured["bands"] = self.bands
+        return "table"
+
+    monkeypatch.setattr(GenulensSourceModel, "build_cmd_prior", fake_build)
+    chart = IsochroneModel(reference_band="Imag", color_bands=("Vmag", "Imag"))
+
+    built = chart.build(reference_edges=[0.0, 1.0], color_edges=[0.0, 1.0])
+
+    assert built.table == "table"
+    assert captured["bands"] == ("Imag", "Vmag")
 
 
 def test_prepare_requires_a_sightline(tmp_path):
