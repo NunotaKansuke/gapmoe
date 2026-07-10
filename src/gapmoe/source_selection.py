@@ -252,7 +252,7 @@ class GenulensSourceModel:
     """Forward-source configuration used to make source-data evidence grids."""
 
     source_data: SourceDataModel = field(default_factory=SourceSelection)
-    photometry: str = "roman"
+    bands: tuple[str, ...] = ()
     isochrone_table_path: str | None = None
     offset_provider: OffsetProvider | None = None
     min_initial_mass_msun: float = 0.09
@@ -336,12 +336,11 @@ class GenulensSourceModel:
         )
 
     def _load_generator(self, genulens: Any) -> Any:
-        if self.photometry not in {"roman", "prime"}:
-            raise ValueError("photometry must be 'roman' or 'prime'")
-        method_name = f"load_{self.photometry}"
-        if self.isochrone_table_path is None:
-            return getattr(genulens.ForwardSourceGenerator, f"load_default_{self.photometry}")()
-        return getattr(genulens.ForwardSourceGenerator, method_name)(self.isochrone_table_path)
+        if self.isochrone_table_path is not None:
+            return genulens.ForwardSourceGenerator.load_table(self.isochrone_table_path)
+        if self.bands:
+            return genulens.ForwardSourceGenerator.load_default_for_bands(list(self.bands))
+        raise ValueError("bands must be specified when using a default isochrone table")
 
 
 def _uses_apparent_photometry(source_data: SourceDataModel) -> bool:

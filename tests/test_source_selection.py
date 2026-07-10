@@ -186,6 +186,22 @@ def test_apparent_source_photometry_requires_distance_and_extinction_offsets() -
         model.build_evidence_grid([8_000.0])
 
 
+def test_genulens_source_model_selects_default_table_from_bands() -> None:
+    calls = []
+
+    class Generator:
+        @staticmethod
+        def load_default_for_bands(bands):
+            calls.append(tuple(bands))
+            return "generator"
+
+    genulens = type("Genulens", (), {"ForwardSourceGenerator": Generator})
+    model = GenulensSourceModel(bands=("Imag", "Vmag"))
+
+    assert model._load_generator(genulens) == "generator"
+    assert calls == [("Imag", "Vmag")]
+
+
 def test_jax_exponential_dust_offsets_match_numpy_offsets() -> None:
     dust = ExponentialDustOffsets(
         l_deg=1.0,
