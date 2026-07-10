@@ -11,6 +11,7 @@ from gapmoe.density.histogram import HistogramDensity as CompatHistogramDensity
 from gapmoe.density.histogram_tables import HistogramTables
 from gapmoe.priors.cmd import CmdGalacticModel
 from gapmoe.priors.galactic import GalacticModel
+from gapmoe.priors.high_level import GalaxyModel as SourceAwareGalaxyModel, IsochroneModel
 from gapmoe.priors.mapped import MappedGalacticModel
 from gapmoe.priors.source import EventPrior5D, SourceCmdPrior
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
@@ -147,6 +148,38 @@ def test_cmd_galactic_model_extracts_source_photometry_from_mcmc_state(histogram
     )
     assert value == pytest.approx(direct)
     assert float(jax.jit(model.log_prob)(theta)) == pytest.approx(direct)
+
+
+def test_source_aware_model_uses_named_magnitudes_for_density_and_radius(histogram_density: HistogramDensity) -> None:
+    log_radius = np.log(2.0)
+    table = CmdPriorTable(
+        coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
+        reference_edges=np.asarray([-20.0, 0.0, 20.0]),
+        color_edges=np.asarray([0.0, 1.0]),
+        density_by_component=np.ones((11, 2, 1)),
+        log_radius_moment_by_component=np.full((11, 2, 1), log_radius),
+        log_radius_square_moment_by_component=np.full((11, 2, 1), 2.0 * log_radius**2),
+    )
+    model = SourceAwareGalaxyModel(
+        density=histogram_density,
+        isochrone=IsochroneModel("Imag", ("Vmag", "Imag"), table=table),
+        l_deg=1.0,
+        b_deg=-3.9,
+        extinction_at_rc={},
+        include_event_rate=False,
+    )
+    magnitudes = {"Imag": 0.5, "Vmag": 1.0}
+
+    assert np.isfinite(float(model.log_source_density(ds=0.6, magnitudes=magnitudes)))
+    estimate = model.source_radius(ds=0.6, magnitudes=magnitudes)
+    expected_mean = np.exp(log_radius + 0.5 * log_radius**2)
+    assert float(estimate.mean_rsun) == pytest.approx(expected_mean)
+    assert float(estimate.std_rsun) > 0.0
+    assert float(estimate.median_rsun) == pytest.approx(2.0)
+    assert float(estimate.p16_rsun) == pytest.approx(1.0)
+    assert float(estimate.p84_rsun) == pytest.approx(4.0)
+    jax = pytest.importorskip("jax")
+    assert float(jax.jit(lambda ds: model.source_radius(ds=ds, magnitudes=magnitudes).mean_rsun)(0.6)) == pytest.approx(expected_mean)
 
 
 def test_event_prior_5d_conditions_on_cmd_without_applying_cmd_prior(histogram_density: HistogramDensity) -> None:

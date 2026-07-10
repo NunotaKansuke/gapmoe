@@ -135,6 +135,8 @@ class CmdPriorEvaluator:
     reference_centers: jnp.ndarray
     color_centers: jnp.ndarray
     density_by_component: jnp.ndarray
+    log_radius_moment_by_component: jnp.ndarray
+    log_radius_square_moment_by_component: jnp.ndarray
     component_to_column: jnp.ndarray
 
     @classmethod
@@ -152,6 +154,14 @@ class CmdPriorEvaluator:
             reference_centers=jnp.asarray(0.5 * (table.reference_edges[:-1] + table.reference_edges[1:])),
             color_centers=jnp.asarray(0.5 * (table.color_edges[:-1] + table.color_edges[1:])),
             density_by_component=jnp.asarray(table.density_by_component),
+            log_radius_moment_by_component=jnp.asarray(
+                table.log_radius_moment_by_component
+                if table.log_radius_moment_by_component is not None else np.zeros_like(table.density_by_component)
+            ),
+            log_radius_square_moment_by_component=jnp.asarray(
+                table.log_radius_square_moment_by_component
+                if table.log_radius_square_moment_by_component is not None else np.zeros_like(table.density_by_component)
+            ),
             component_to_column=jnp.asarray(component_to_column),
         )
 
@@ -177,7 +187,30 @@ class CmdPriorEvaluator:
         absolute_color = color - (offsets[:, 1] - offsets[:, 2])
         return self._bilinear_all_components(absolute_reference, absolute_color)
 
-    def _bilinear_all_components(self, reference: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+    def log_radius_moments_all_components(
+        self,
+        reference_magnitude: float,
+        color: float,
+        magnitude_offsets: jnp.ndarray,
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        """Return CMD-density-weighted first and second log-radius moments."""
+
+        offsets = jnp.asarray(magnitude_offsets)
+        if offsets.ndim == 1:
+            offsets = jnp.broadcast_to(offsets, (self.component_to_column.shape[0], 3))
+        absolute_reference = reference_magnitude - offsets[:, 0]
+        absolute_color = color - (offsets[:, 1] - offsets[:, 2])
+        return (
+            self._bilinear_all_components(absolute_reference, absolute_color, self.log_radius_moment_by_component),
+            self._bilinear_all_components(absolute_reference, absolute_color, self.log_radius_square_moment_by_component),
+        )
+
+    def _bilinear_all_components(
+        self,
+        reference: jnp.ndarray,
+        color: jnp.ndarray,
+        values_by_component: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
         n_reference = self.reference_centers.shape[0]
         n_color = self.color_centers.shape[0]
         i1 = jnp.clip(jnp.searchsorted(self.reference_centers, reference, side="right"), 0, n_reference - 1)
@@ -192,7 +225,8 @@ class CmdPriorEvaluator:
         valid_component = columns >= 0
         safe_columns = jnp.maximum(columns, 0)
         component = jnp.arange(self.component_to_column.shape[0])
-        table = self.density_by_component[safe_columns]
+        values = self.density_by_component if values_by_component is None else values_by_component
+        table = values[safe_columns]
         value = (
             (1.0 - tx) * (1.0 - ty) * table[component, i0, j0]
             + tx * (1.0 - ty) * table[component, i1, j0]

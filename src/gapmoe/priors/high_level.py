@@ -17,6 +17,7 @@ from gapmoe.source_selection import (
     ExponentialDustOffsets,
     GenulensSourceModel,
     MagnitudeCut,
+    SourcePopulation,
     SourceSelection,
 )
 from gapmoe.pre_runner import PreRunResult, PreRunner
@@ -42,6 +43,7 @@ class IsochroneModel:
     color_bands: tuple[str, str]
     magnitude_range: tuple[float, float] | None = None
     color_range: tuple[float, float] | None = None
+    population: SourcePopulation | None = None
     table: CmdPriorTable | None = None
 
     def __post_init__(self) -> None:
@@ -70,6 +72,18 @@ class IsochroneModel:
             cuts.append(ColorCut(*self.color_bands, *self.color_range))
         return SourceSelection(tuple(cuts)) if cuts else None
 
+    def values_from_magnitudes(self, magnitudes: Mapping[str, Any]) -> tuple[Any, Any]:
+        """Convert named apparent magnitudes into this model's table coordinates."""
+
+        required = self.coordinates.bands
+        missing = [band for band in required if band not in magnitudes]
+        if missing:
+            raise ValueError(f"magnitudes is missing required band(s): {', '.join(missing)}")
+        return (
+            magnitudes[self.reference_band],
+            magnitudes[self.color_bands[0]] - magnitudes[self.color_bands[1]],
+        )
+
     def build(
         self,
         *,
@@ -83,6 +97,8 @@ class IsochroneModel:
         source_model = source_model or GenulensSourceModel()
         if not source_model.bands and source_model.isochrone_table_path is None:
             source_model = replace(source_model, bands=self.coordinates.bands)
+        if source_model.population is None and self.population is not None:
+            source_model = replace(source_model, population=self.population)
         return replace(
             self,
             table=source_model.build_cmd_prior(
@@ -98,8 +114,9 @@ class IsochroneModel:
 class GalaxyModel:
     """Source-aware Galactic event prior with one ``log_density`` entry point.
 
-    ``theta`` is always ``(ML, DL, DS, mu_N, mu_E)``.  ``cmd`` is either
-    ``None`` or ``(reference magnitude, blue-minus-red colour)``.
+    ``theta`` is always ``(ML, DL, DS, mu_N, mu_E)``. ``magnitudes`` is an
+    optional mapping from the bands requested by ``isochrone`` to their
+    apparent magnitudes.
     """
 
     density: Any
@@ -173,21 +190,40 @@ class GalaxyModel:
         object.__setattr__(self, "_conditional_prior", conditional)
         object.__setattr__(self, "_selected_prior", selected)
 
-    def log_density(self, theta: Any, cmd: Any | None = None, *, context: Context = None):
-        """Evaluate the event density for a five-vector and optional CMD pair."""
+    def log_density(self, theta: Any, magnitudes: Mapping[str, Any] | None = None, *, context: Context = None):
+        """Evaluate the event density for a five-vector and optional source magnitudes."""
 
         ml, dl, ds, mu_n, mu_e = theta[:5]
-        if cmd is None:
+        if magnitudes is None:
             return self._selected_prior.log_density(ml, dl, ds, mu_n, mu_e, context=context)
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
         return self._conditional_prior.log_density(
             ml,
             dl,
             ds,
             mu_n,
             mu_e,
-            reference_magnitude=cmd[0],
-            color=cmd[1],
+            reference_magnitude=reference_magnitude,
+            color=color,
             context=context,
+        )
+
+    def log_source_density(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
+        """Evaluate p(apparent magnitudes | DS, l, b) from the source population."""
+
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
+        return self._conditional_prior.source_prior.log_conditional_density_at_distance(
+            ds, reference_magnitude, color, context=context
+        )
+
+    def source_radius(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
+        """Return a source-population radius summary in solar radii."""
+
+        if self.isochrone.table is None or self.isochrone.table.log_radius_moment_by_component is None:
+            raise RuntimeError("isochrone table has no radius moments; rebuild it with the current gapmoe version")
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
+        return self._conditional_prior.source_prior.source_radius_at_distance(
+            ds, reference_magnitude, color, context=context
         )
 
 
@@ -343,6 +379,7 @@ class Model:
         color_bands: tuple[str, str],
         magnitude_range: tuple[float, float] | None = None,
         color_range: tuple[float, float] | None = None,
+        population: SourcePopulation | None = None,
         reference_edges: Sequence[float] | None = None,
         color_edges: Sequence[float] | None = None,
         smoothing_sigma_bins: float = 0.75,
@@ -362,6 +399,7 @@ class Model:
             color_bands=color_bands,
             magnitude_range=magnitude_range,
             color_range=color_range,
+            population=population,
         )
         cached = self._load_isochrone(model, reference_edges, color_edges, smoothing_sigma_bins)
         if cached is not None:
@@ -506,9 +544,11 @@ class Model:
     @staticmethod
     def _isochrone_metadata(model: IsochroneModel, smoothing_sigma_bins: float) -> dict[str, Any]:
         return {
+            "schema": "isochrone-v2-radius-moments",
             "reference_band": model.reference_band,
             "color_bands": list(model.color_bands),
             "magnitude_range": list(model.magnitude_range) if model.magnitude_range is not None else None,
             "color_range": list(model.color_range) if model.color_range is not None else None,
+            "population": None if model.population is None else model.population.metadata(),
             "smoothing_sigma_bins": smoothing_sigma_bins,
         }

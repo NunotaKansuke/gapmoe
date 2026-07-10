@@ -202,6 +202,26 @@ def test_genulens_source_model_selects_default_table_from_bands() -> None:
     assert calls == [("Imag", "Vmag")]
 
 
+def test_cmd_prior_keeps_conditional_radius_moments() -> None:
+    samples = IsochroneSampleGrid(
+        absolute_magnitudes={"Imag": np.asarray([0.5, 0.5]), "Vmag": np.asarray([1.0, 1.0])},
+        radius_rsun=np.asarray([1.0, 4.0]),
+        weights=np.asarray([0.5, 0.5]),
+    )
+    table = CmdPriorTable.from_isochrone_samples(
+        {0: samples},
+        CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
+        reference_edges=[0.0, 1.0],
+        color_edges=[0.0, 1.0],
+        smoothing_sigma_bins=0.0,
+    )
+
+    assert table.log_radius_moment_by_component is not None
+    assert table.log_radius_square_moment_by_component is not None
+    density = table.density_by_component[0, 0, 0]
+    assert np.exp(table.log_radius_moment_by_component[0, 0, 0] / density) == pytest.approx(2.0)
+
+
 def test_jax_exponential_dust_offsets_match_numpy_offsets() -> None:
     dust = ExponentialDustOffsets(
         l_deg=1.0,

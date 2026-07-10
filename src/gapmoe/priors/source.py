@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, NamedTuple
 
 import jax.numpy as jnp
 from jax import vmap
@@ -11,6 +11,17 @@ from gapmoe.priors.event_rate_backend import log_event_rate_backend
 
 Context = Mapping[str, Any] | None
 OffsetCalculator = Callable[[Any, Context], jnp.ndarray]
+
+
+class SourceRadiusEstimate(NamedTuple):
+    """Log-normal summary of the source-radius posterior, in solar radii."""
+
+    mean_rsun: Any
+    std_rsun: Any
+    median_rsun: Any
+    p16_rsun: Any
+    p84_rsun: Any
+    sigma_log_rsun: Any
 
 
 @dataclass(frozen=True)
@@ -40,6 +51,69 @@ class SourceCmdPrior:
         """Return p(DS, CMD) after marginalizing the source component."""
 
         return jnp.sum(self.component_density_at_distance(ds_kpc, reference_magnitude, color, context=context))
+
+    def conditional_density_at_distance(
+        self,
+        ds_kpc: Any,
+        reference_magnitude: Any,
+        color: Any,
+        *,
+        context: Context = None,
+    ):
+        """Return p(photometry | DS) under the Galactic source-component mixture."""
+
+        offsets = self.offset_calculator(ds_kpc, context)
+        photometric = self.cmd_prior.density_all_components(reference_magnitude, color, offsets)
+        components = self.density.distance.source_component_values(ds_kpc)
+        normalisation = jnp.sum(components)
+        return jnp.where(normalisation > 0.0, jnp.sum(components * photometric) / normalisation, 0.0)
+
+    def log_conditional_density_at_distance(
+        self,
+        ds_kpc: Any,
+        reference_magnitude: Any,
+        color: Any,
+        *,
+        context: Context = None,
+    ):
+        value = self.conditional_density_at_distance(ds_kpc, reference_magnitude, color, context=context)
+        return jnp.where(value > 0.0, jnp.log(value), -jnp.inf)
+
+    def source_radius_at_distance(
+        self,
+        ds_kpc: Any,
+        reference_magnitude: Any,
+        color: Any,
+        *,
+        context: Context = None,
+    ):
+        """Return a lightweight log-normal source-radius posterior summary.
+
+        The CMD table carries density-weighted log-radius moments. Component
+        weights are updated by the supplied photometry at the given distance.
+        """
+
+        offsets = self.offset_calculator(ds_kpc, context)
+        density = self.cmd_prior.density_all_components(reference_magnitude, color, offsets)
+        first, second = self.cmd_prior.log_radius_moments_all_components(reference_magnitude, color, offsets)
+        components = self.density.distance.source_component_values(ds_kpc)
+        denominator = jnp.sum(components * density)
+        mean_log_radius = jnp.where(denominator > 0.0, jnp.sum(components * first) / denominator, 0.0)
+        second_log_radius = jnp.where(denominator > 0.0, jnp.sum(components * second) / denominator, 0.0)
+        variance_log_radius = jnp.maximum(0.0, second_log_radius - mean_log_radius**2)
+        sigma_log_radius = jnp.sqrt(variance_log_radius)
+        median = jnp.exp(mean_log_radius)
+        mean = jnp.exp(mean_log_radius + 0.5 * variance_log_radius)
+        std = jnp.sqrt((jnp.exp(variance_log_radius) - 1.0) * jnp.exp(2.0 * mean_log_radius + variance_log_radius))
+        valid = denominator > 0.0
+        return SourceRadiusEstimate(
+            mean_rsun=jnp.where(valid, mean, jnp.nan),
+            std_rsun=jnp.where(valid, std, jnp.nan),
+            median_rsun=jnp.where(valid, median, jnp.nan),
+            p16_rsun=jnp.where(valid, jnp.exp(mean_log_radius - sigma_log_radius), jnp.nan),
+            p84_rsun=jnp.where(valid, jnp.exp(mean_log_radius + sigma_log_radius), jnp.nan),
+            sigma_log_rsun=jnp.where(valid, sigma_log_radius, jnp.nan),
+        )
 
     def marginal_density(self, reference_magnitude: Any, color: Any, *, context: Context = None):
         """Return the marginal source-CMD prior p(CMD | l,b)."""

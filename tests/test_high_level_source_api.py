@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from gapmoe import Model
+from gapmoe import AgeMetallicityPoint, Model, SourcePopulation
 from gapmoe.pre_runner import PreRunResult
 from gapmoe.priors.high_level import IsochroneModel
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable, GenulensSourceModel
@@ -50,6 +50,33 @@ def test_isochrone_build_selects_internal_table_from_requested_bands(monkeypatch
 
     assert built.table == "table"
     assert captured["bands"] == ("Imag", "Vmag")
+
+
+def test_isochrone_forwards_optional_source_population(monkeypatch):
+    captured = {}
+
+    def fake_build(self, coordinates, **kwargs):
+        captured["population"] = self.population
+        return "table"
+
+    monkeypatch.setattr(GenulensSourceModel, "build_cmd_prior", fake_build)
+    population = SourcePopulation(
+        imf={"alpha2": -1.3},
+        age_metallicity_by_component={8: (AgeMetallicityPoint(9.9, 0.1),)},
+    )
+    chart = IsochroneModel(reference_band="Imag", color_bands=("Vmag", "Imag"), population=population)
+
+    chart.build(reference_edges=[0.0, 1.0], color_edges=[0.0, 1.0])
+
+    assert captured["population"] == population
+
+
+def test_isochrone_converts_named_magnitudes_to_its_internal_coordinates():
+    chart = IsochroneModel(reference_band="Imag", color_bands=("Vmag", "Imag"))
+
+    assert chart.values_from_magnitudes({"Imag": 19.0, "Vmag": 21.0}) == (19.0, 2.0)
+    with pytest.raises(ValueError, match="Vmag"):
+        chart.values_from_magnitudes({"Imag": 19.0})
 
 
 def test_prepare_requires_a_sightline(tmp_path):

@@ -11,6 +11,59 @@ ComponentIndex = int
 BandOffsets = Mapping[str, float]
 
 
+@dataclass(frozen=True)
+class AgeMetallicityPoint:
+    """One weighted age-metallicity node for an isochrone source population."""
+
+    log_age: float
+    metallicity_mh: float
+    weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(self.log_age) or not np.isfinite(self.metallicity_mh) or self.weight < 0.0:
+            raise ValueError("age-metallicity points require finite values and non-negative weights")
+
+
+@dataclass(frozen=True)
+class SourcePopulation:
+    """Optional overrides for genulens' default source-population prior.
+
+    Leaving both fields unset reproduces genulens' component-dependent
+    age-metallicity prior and its default broken-power-law IMF.
+    """
+
+    imf: Mapping[str, float] | None = None
+    age_metallicity_by_component: Mapping[int, Sequence[AgeMetallicityPoint]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.imf is not None:
+            unknown = set(self.imf) - {
+                "m0", "m1", "m2", "m3", "mbr", "ml", "mu", "alpha0", "alpha1", "alpha2", "alpha3", "alpha4", "alpha5"
+            }
+            if unknown:
+                raise ValueError(f"unknown IMF parameter(s): {', '.join(sorted(unknown))}")
+        if self.age_metallicity_by_component is not None:
+            for component, points in self.age_metallicity_by_component.items():
+                if int(component) < 0 or not points or sum(point.weight for point in points) <= 0.0:
+                    raise ValueError("each overridden source component needs positive total population weight")
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "imf": None if self.imf is None else dict(self.imf),
+            "age_metallicity_by_component": (
+                None
+                if self.age_metallicity_by_component is None
+                else {
+                    str(component): [
+                        {"log_age": point.log_age, "metallicity_mh": point.metallicity_mh, "weight": point.weight}
+                        for point in points
+                    ]
+                    for component, points in self.age_metallicity_by_component.items()
+                }
+            ),
+        }
+
+
 def angular_radius_microarcsec(radius_rsun: np.ndarray | float, distance_pc: np.ndarray | float) -> np.ndarray:
     """Return stellar angular radius in microarcsec."""
 
@@ -253,6 +306,7 @@ class GenulensSourceModel:
 
     source_data: SourceDataModel = field(default_factory=SourceSelection)
     bands: tuple[str, ...] = ()
+    population: SourcePopulation | None = None
     isochrone_table_path: str | None = None
     offset_provider: OffsetProvider | None = None
     min_initial_mass_msun: float = 0.09
@@ -324,6 +378,7 @@ class GenulensSourceModel:
         return GenulensCmdPriorBuilder(
             generator=generator,
             genulens=genulens,
+            population_points_provider=self._population_points_provider(),
             min_initial_mass_msun=self.min_initial_mass_msun,
             max_initial_mass_msun=self.max_initial_mass_msun,
             samples_per_population_point=self.samples_per_population_point,
@@ -336,11 +391,30 @@ class GenulensSourceModel:
         )
 
     def _load_generator(self, genulens: Any) -> Any:
+        imf = None
+        if self.population is not None and self.population.imf is not None:
+            imf = genulens.IMFParameters()
+            for name, value in self.population.imf.items():
+                setattr(imf, name, float(value))
         if self.isochrone_table_path is not None:
-            return genulens.ForwardSourceGenerator.load_table(self.isochrone_table_path)
+            return genulens.ForwardSourceGenerator.load_table(self.isochrone_table_path, imf) if imf is not None else genulens.ForwardSourceGenerator.load_table(self.isochrone_table_path)
         if self.bands:
-            return genulens.ForwardSourceGenerator.load_default_for_bands(list(self.bands))
+            return (
+                genulens.ForwardSourceGenerator.load_default_for_bands(list(self.bands), imf)
+                if imf is not None else genulens.ForwardSourceGenerator.load_default_for_bands(list(self.bands))
+            )
         raise ValueError("bands must be specified when using a default isochrone table")
+
+    def _population_points_provider(self) -> PopulationPointProvider | None:
+        if self.population is None or self.population.age_metallicity_by_component is None:
+            return None
+
+        overrides = self.population.age_metallicity_by_component
+
+        def provider(component: ComponentIndex) -> Sequence[AgeMetallicityPoint]:
+            return overrides.get(component, ())
+
+        return provider
 
 
 def _uses_apparent_photometry(source_data: SourceDataModel) -> bool:
@@ -569,6 +643,8 @@ class CmdPriorTable:
     reference_edges: np.ndarray
     color_edges: np.ndarray
     density_by_component: np.ndarray
+    log_radius_moment_by_component: np.ndarray | None = None
+    log_radius_square_moment_by_component: np.ndarray | None = None
     component_indices: np.ndarray | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
 
@@ -587,6 +663,16 @@ class CmdPriorTable:
             raise ValueError("density_by_component must have shape (component, reference_bin, color_bin)")
         if np.any(~np.isfinite(density)) or np.any(density < 0.0):
             raise ValueError("CMD density must be finite and non-negative")
+        for name, moment in (
+            ("log_radius_moment_by_component", self.log_radius_moment_by_component),
+            ("log_radius_square_moment_by_component", self.log_radius_square_moment_by_component),
+        ):
+            if moment is not None:
+                values = np.asarray(moment, dtype=float)
+                if values.shape != density.shape:
+                    raise ValueError(f"{name} must have the same shape as density_by_component")
+                if np.any(~np.isfinite(values)):
+                    raise ValueError(f"{name} must be finite")
 
     @classmethod
     def from_isochrone_samples(
@@ -609,6 +695,8 @@ class CmdPriorTable:
             (len(components), len(reference_edges_array) - 1, len(color_edges_array) - 1),
             dtype=float,
         )
+        log_radius_moment = np.zeros_like(density)
+        log_radius_square_moment = np.zeros_like(density)
         bin_areas = np.diff(reference_edges_array)[:, None] * np.diff(color_edges_array)[None, :]
         for column, component in enumerate(components):
             samples = samples_by_component[int(component)]
@@ -620,6 +708,13 @@ class CmdPriorTable:
                 bins=(reference_edges_array, color_edges_array),
                 weights=weights,
             )
+            log_radius = np.log(np.asarray(samples.radius_rsun, dtype=float))
+            first_moment, _, _ = np.histogram2d(
+                reference, color, bins=(reference_edges_array, color_edges_array), weights=weights * log_radius
+            )
+            second_moment, _, _ = np.histogram2d(
+                reference, color, bins=(reference_edges_array, color_edges_array), weights=weights * log_radius**2
+            )
             if smoothing is None:
                 sigma_reference = sigma_color = smoothing_sigma_bins
             else:
@@ -627,14 +722,20 @@ class CmdPriorTable:
                 sigma_color = smoothing.color_sigma_mag / np.median(np.diff(color_edges_array))
             if sigma_reference > 0.0 or sigma_color > 0.0:
                 counts = _gaussian_smooth_2d(counts, sigma_reference, sigma_color)
+                first_moment = _gaussian_smooth_2d(first_moment, sigma_reference, sigma_color)
+                second_moment = _gaussian_smooth_2d(second_moment, sigma_reference, sigma_color)
             normalisation = float(np.sum(counts))
             if normalisation > 0.0:
                 density[column] = counts / normalisation / bin_areas
+                log_radius_moment[column] = first_moment / normalisation / bin_areas
+                log_radius_square_moment[column] = second_moment / normalisation / bin_areas
         return cls(
             coordinates=coordinates,
             reference_edges=reference_edges_array,
             color_edges=color_edges_array,
             density_by_component=density,
+            log_radius_moment_by_component=log_radius_moment,
+            log_radius_square_moment_by_component=log_radius_square_moment,
             component_indices=components,
             metadata={
                 **dict(metadata or {}),
@@ -708,6 +809,14 @@ class CmdPriorTable:
             reference_edges=np.asarray(self.reference_edges, dtype=float),
             color_edges=np.asarray(self.color_edges, dtype=float),
             density_by_component=np.asarray(self.density_by_component, dtype=float),
+            log_radius_moment_by_component=(
+                np.asarray(self.log_radius_moment_by_component, dtype=float)
+                if self.log_radius_moment_by_component is not None else np.asarray([])
+            ),
+            log_radius_square_moment_by_component=(
+                np.asarray(self.log_radius_square_moment_by_component, dtype=float)
+                if self.log_radius_square_moment_by_component is not None else np.asarray([])
+            ),
             component_indices=np.asarray(
                 self.component_indices
                 if self.component_indices is not None
@@ -731,6 +840,14 @@ class CmdPriorTable:
             reference_edges=data["reference_edges"],
             color_edges=data["color_edges"],
             density_by_component=data["density_by_component"],
+            log_radius_moment_by_component=(
+                data["log_radius_moment_by_component"]
+                if "log_radius_moment_by_component" in data and data["log_radius_moment_by_component"].size else None
+            ),
+            log_radius_square_moment_by_component=(
+                data["log_radius_square_moment_by_component"]
+                if "log_radius_square_moment_by_component" in data and data["log_radius_square_moment_by_component"].size else None
+            ),
             component_indices=data.get("component_indices"),
             metadata=metadata,
         )
@@ -964,7 +1081,9 @@ class GenulensCmdPriorBuilder:
     def _population_points(self, component: ComponentIndex) -> Sequence[Any]:
         prior_component = self.population_component_mapper(component)
         if self.population_points_provider is not None:
-            return self.population_points_provider(prior_component)
+            points = self.population_points_provider(prior_component)
+            if points:
+                return points
         return self.genulens.SourcePopulationPrior.points_for_component(prior_component)
 
     def _query(self, component: ComponentIndex, point: Any) -> Any:
