@@ -1,12 +1,34 @@
 """gapmoe public API."""
 
-__all__ = ["Model"]
+__all__ = [
+    "Model",
+    "GalacticModel",
+    "JaxGalacticModel",
+    "MappedGalacticModel",
+    "ParamType",
+    "from_model_spec",
+    "PreRunner",
+    "PreRunResult",
+    "GenulensEnvironment",
+    "HistogramDensity",
+    "SourcePopulation",
+    "AgeMetallicityPoint",
+    "CmdCoordinates",
+    "CmdPriorTable",
+    "GenulensSourceModel",
+    "SourceSelection",
+    "SourceEvidenceGrid",
+    "ExponentialDustModel",
+    "ExponentialDustOffsets",
+    "CmdGalacticModel",
+    "EventPrior5D",
+    "SourceCmdPrior",
+]
 
 
 def __getattr__(name):
     if name == "Model":
         from .priors.high_level import Model
-
         return Model
     if name == "GalacticModel":
         from .priors.galactic import GalacticModel
@@ -71,4 +93,8 @@ def __getattr__(name):
             "EventPrior5D": EventPrior5D,
             "SourceCmdPrior": SourceCmdPrior,
         }[name]
+    if name in {"SourcePopulation", "AgeMetallicityPoint"}:
+        from .source_selection import AgeMetallicityPoint, SourcePopulation
+
+        return {"SourcePopulation": SourcePopulation, "AgeMetallicityPoint": AgeMetallicityPoint}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

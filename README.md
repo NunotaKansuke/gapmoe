@@ -42,7 +42,20 @@ isochrone = model.isochrone(
 prior = model.galactic_model(isochrone)
 
 logp = prior.log_density(theta)
-logp_at_cmd = prior.log_density(theta, cmd=[i_s, v_minus_i_s])
+logp_at_source_magnitudes = prior.log_density(
+    theta,
+    magnitudes={"Imag": i_s, "Vmag": v_s},
+)
+
+logp_source = prior.log_source_density(
+    ds=theta[2],
+    magnitudes={"Imag": i_s, "Vmag": v_s},
+)
+radius = prior.source_radius(
+    ds=theta[2],
+    magnitudes={"Imag": i_s, "Vmag": v_s},
+)
+radius_rsun = radius.mean_rsun
 ```
 
 To reuse an existing prepared directory without running genulens:
@@ -51,10 +64,35 @@ To reuse an existing prepared directory without running genulens:
 model = gapmoe.Model().resume("runs/event-001")
 ```
 
-Without `cmd`, the optional ranges in `isochrone()` define the source
-selection. With `cmd=[magnitude, colour]`, the prior instead conditions the
-source-distance distribution on that current CMD value; it does not apply the
-hard range a second time. If no ranges are supplied, all sources are used.
+Without `magnitudes`, the optional ranges in `isochrone()` define the source
+selection. With named apparent magnitudes, the prior instead conditions the
+source-distance distribution on that current photometry; it does not apply the
+hard range a second time. `log_source_density(ds=..., magnitudes=...)` adds the
+source-photometry prior itself, while `source_radius(...)` returns the corresponding
+source-population radius summary. If no ranges are supplied, all sources are
+used.
+
+The default isochrone source population exactly uses genulens' broken-power-law
+IMF and its component-dependent age-metallicity mixtures. Override only the
+parts that matter for a systematic test:
+
+```python
+from gapmoe import AgeMetallicityPoint, SourcePopulation
+
+population = SourcePopulation(
+    imf={"alpha2": -1.3},
+    age_metallicity_by_component={
+        8: (AgeMetallicityPoint(log_age=9.9, metallicity_mh=0.1, weight=1.0),),
+    },
+)
+isochrone = model.isochrone(
+    reference_band="Imag",
+    color_bands=("Vmag", "Imag"),
+    population=population,
+)
+```
+
+Unspecified components retain the genulens default mixture.
 
 For V/I work, `model.set(ai_rc=..., evi_rc=...)` is equivalent to supplying
 the matching per-band RC extinctions. For other bands, use `extinction`.
@@ -204,6 +242,7 @@ from gapmoe.source_selection import (
 )
 
 source_model = GenulensSourceModel(
+    bands=("F146mag",),
     source_data=SourceSelection(cuts=(MagnitudeCut("F146mag", 15.0, 21.0),)),
     offset_provider=ExponentialDustOffsets(
         l_deg=1.0,
@@ -241,6 +280,7 @@ from gapmoe.source_selection import (
 )
 
 source_model = GenulensSourceModel(
+    bands=("F146mag",),
     source_data=SourcePhotometry(
         magnitudes=(MagnitudeMeasurement("F146mag", value=19.2, error=0.03),),
     ),
@@ -275,7 +315,9 @@ import numpy as np
 
 from gapmoe.source_selection import CmdCoordinates, GenulensSourceModel
 
-cmd_prior = GenulensSourceModel(samples_per_population_point=4096).build_cmd_prior(
+cmd_prior = GenulensSourceModel(
+    bands=("Imag", "Vmag"), samples_per_population_point=4096
+).build_cmd_prior(
     CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
     reference_edges=np.linspace(-5.0, 15.0, 401),
     color_edges=np.linspace(-1.0, 6.0, 281),
