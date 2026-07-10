@@ -20,6 +20,8 @@ from gapmoe.source_selection import (
     SourceSelection,
 )
 from gapmoe.pre_runner import PreRunResult, PreRunner
+from gapmoe.flow_releases import FlowRelease, get_flow_release
+from gapmoe.flow_package import FlowPackage
 
 from .source import EventPrior5D, SourceCmdPrior
 
@@ -195,7 +197,9 @@ class Model:
     intentionally kept behind this interface.
     """
 
-    _SETTINGS = {"l", "b", "extinction", "dm_rc", "dust_scale_height_pc", "ai_rc", "evi_rc"}
+    _SETTINGS = {
+        "l", "b", "extinction", "dm_rc", "dust_scale_height_pc", "ai_rc", "evi_rc", "remnant", "binary"
+    }
 
     def __init__(
         self,
@@ -211,10 +215,12 @@ class Model:
             backend=backend,
         )
         self.directory: Path | None = None
-        self._settings: dict[str, Any] = {"dust_scale_height_pc": 164.0}
+        self._settings: dict[str, Any] = {"dust_scale_height_pc": 164.0, "remnant": 0, "binary": 0}
         self._explicit_settings: set[str] = set()
         self._prepare_options: dict[str, Any] = {}
         self._prepared: PreRunResult | None = None
+        self._flow_release: FlowRelease | None = None
+        self._flow_package: FlowPackage | None = None
 
     def set(self, **settings: Any) -> "Model":
         """Set sightline and extinction values, invalidating prepared tables."""
@@ -231,13 +237,24 @@ class Model:
         for name in ("l", "b", "dm_rc", "dust_scale_height_pc", "ai_rc", "evi_rc"):
             if name in settings and settings[name] is not None:
                 settings[name] = float(settings[name])
+        for name in ("remnant", "binary"):
+            if name in settings:
+                if settings[name] not in (0, 1, False, True):
+                    raise ValueError(f"{name} must be 0 or 1")
+                settings[name] = int(settings[name])
         if "dust_scale_height_pc" in settings and settings["dust_scale_height_pc"] <= 0.0:
             raise ValueError("dust_scale_height_pc must be positive")
         if "extinction" in settings and ("ai_rc" in settings or "evi_rc" in settings):
             raise ValueError("use either extinction or ai_rc/evi_rc, not both")
 
+        candidate = {**self._settings, **settings}
+        if self._flow_release is not None and "l" in candidate and "b" in candidate:
+            self._flow_release.validate_sightline(candidate["l"], candidate["b"])
+            self._flow_release.validate_model_options(
+                remnant=candidate["remnant"], binary=candidate["binary"]
+            )
         precompute_changed = any(
-            name in settings and settings[name] != self._settings.get(name) for name in ("l", "b")
+            name in settings and settings[name] != self._settings.get(name) for name in ("l", "b", "remnant", "binary")
         )
         self._settings.update(settings)
         self._explicit_settings.update(settings)
@@ -245,9 +262,25 @@ class Model:
             self._prepared = None
         return self
 
+    def set_flow(self, *, release: str = "default") -> "Model":
+        """Select a bundled trained flow release for the current sightline."""
+
+        if "l" not in self._settings or "b" not in self._settings:
+            raise ValueError("set l and b before set_flow()")
+        flow_release = get_flow_release(release)
+        flow_release.validate_sightline(self._settings["l"], self._settings["b"])
+        flow_release.validate_model_options(
+            remnant=self._settings["remnant"], binary=self._settings["binary"]
+        )
+        self._flow_release = flow_release
+        self._flow_package = None
+        return self
+
     def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Model":
         """Create or reuse raw pre-gapmoe artifacts for the configured sightline."""
 
+        if self._flow_release is not None:
+            raise RuntimeError("set_flow() selects a pre-trained backend; do not call prepare()")
         self.directory = Path(directory).expanduser().resolve()
         if not force:
             cached = self._load_prepared_directory(self.directory)
@@ -267,7 +300,9 @@ class Model:
                     return self
         if "l" not in self._settings or "b" not in self._settings:
             raise ValueError("set l and b before prepare()")
-        forbidden = {"source_model", "cmd_prior", "l", "b", "l_deg", "b_deg", "run_name"} & set(options)
+        forbidden = {
+            "source_model", "cmd_prior", "l", "b", "l_deg", "b_deg", "run_name", "remnant", "binary"
+        } & set(options)
         if forbidden:
             names = ", ".join(sorted(forbidden))
             raise TypeError(f"prepare() manages {names}; configure source CMD through isochrone()")
@@ -279,6 +314,8 @@ class Model:
             l=self._settings["l"],
             b=self._settings["b"],
             run_name=self.directory.name,
+            remnant=self._settings["remnant"],
+            binary=self._settings["binary"],
             **options,
         )
         self._prepare_options = dict(options)
@@ -338,6 +375,17 @@ class Model:
     def galactic_model(self, isochrone: IsochroneModel, *, include_event_rate: bool = True) -> GalaxyModel:
         """Return the five-dimensional event prior for an isochrone model."""
 
+        if self._flow_release is not None:
+            self._flow_release.validate_sightline(self._settings["l"], self._settings["b"])
+            self._flow_release.validate_model_options(
+                remnant=self._settings["remnant"], binary=self._settings["binary"]
+            )
+            if self._flow_package is None:
+                self._flow_package = FlowPackage.bundled(self._flow_release.name)
+            raise RuntimeError(
+                "flow package loading is ready, but event-kernel deserialization will be enabled when the trained "
+                "release artifact is added"
+            )
         if self._prepared is None:
             raise RuntimeError("call prepare() before galactic_model()")
         return GalaxyModel.from_pre_run(

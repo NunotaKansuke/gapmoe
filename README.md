@@ -51,6 +51,15 @@ To reuse an existing prepared directory without running genulens:
 model = gapmoe.Model().resume("runs/event-001")
 ```
 
+For the bundled trained flow, select the release instead of preparing a
+histogram directory:
+
+```python
+model = gapmoe.Model()
+model.set(l=1.0, b=-3.9, extinction={"Imag": 1.2, "Vmag": 2.0})
+model.set_flow()
+```
+
 Without `cmd`, the optional ranges in `isochrone()` define the source
 selection. With `cmd=[magnitude, colour]`, the prior instead conditions the
 source-distance distribution on that current CMD value; it does not apply the

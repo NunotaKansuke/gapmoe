@@ -21,6 +21,12 @@ OptionSequence = Sequence[OptionValue]
 OptionMap = Mapping[str, Union[OptionValue, OptionSequence]]
 
 
+def _binary_option(name: str, value: int | bool) -> int:
+    if value not in (0, 1, False, True):
+        raise ValueError(f"{name} must be 0 or 1")
+    return int(value)
+
+
 @dataclass(frozen=True)
 class PreRunResult:
     ra_deg: Optional[float]
@@ -145,6 +151,8 @@ class PreRunner:
         dmu_masyr: float = 0.5,
         autoerr: bool = True,
         err_target: Optional[float] = None,
+        remnant: int | bool = 0,
+        binary: int | bool = 0,
         seed: Optional[int] = None,
         mass_options: Optional[Mapping[str, OptionValue]] = None,
         rho_options: Optional[OptionMap] = None,
@@ -163,6 +171,9 @@ class PreRunner:
         heliocentric relative proper-motion distribution from the Galactic
         lens/source kinematics.
         """
+
+        remnant = _binary_option("remnant", remnant)
+        binary = _binary_option("binary", binary)
 
         self._prepare()
         ra_value, dec_value, l_value, b_value = self._resolve_coordinates(
@@ -194,7 +205,12 @@ class PreRunner:
         for path in (mass_path, rho_path, murel_path, manifest_path):
             path.parent.mkdir(parents=True, exist_ok=True)
 
-        base_options: Dict[str, OptionValue] = {"l": l_value, "b": b_value}
+        base_options: Dict[str, OptionValue] = {
+            "l": l_value,
+            "b": b_value,
+            "REMNANT": remnant,
+            "BINARY": binary,
+        }
         if seed is not None:
             base_options["seed"] = seed
         if model_options:

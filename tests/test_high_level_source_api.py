@@ -128,6 +128,34 @@ def test_prepare_rejects_a_cached_directory_at_a_different_sightline(tmp_path):
         model.prepare(directory)
 
 
+def test_set_flow_checks_the_release_sightline_coverage():
+    model = Model(genulens_root="../genulens").set(l=1.0, b=-3.9)
+
+    assert model.set_flow() is model
+    with pytest.raises(ValueError, match="covers"):
+        model.set(l=5.0)
+
+
+def test_set_flow_requires_sightline_and_known_release():
+    with pytest.raises(ValueError, match="set l and b"):
+        Model(genulens_root="../genulens").set_flow()
+    with pytest.raises(ValueError, match="unknown flow release"):
+        Model(genulens_root="../genulens").set(l=1.0, b=-3.9).set_flow(release="missing")
+
+
+def test_remnant_and_binary_are_forwarded_and_must_match_a_flow_release(tmp_path, monkeypatch):
+    model = Model(genulens_root="../genulens").set(l=1.0, b=-3.9, remnant=1, binary=1)
+    with pytest.raises(ValueError, match="requires REMNANT=0"):
+        model.set_flow()
+
+    model = Model(genulens_root="../genulens").set(l=1.0, b=-3.9, remnant=0, binary=0)
+    captured = {}
+    monkeypatch.setattr(model._runner, "run", lambda **kwargs: captured.update(kwargs))
+    model.prepare(tmp_path / "event")
+    assert captured["remnant"] == 0
+    assert captured["binary"] == 0
+
+
 def test_isochrone_reuses_the_cmd_table_saved_in_a_resumed_directory(tmp_path):
     directory = tmp_path / "event-001"
     directory.mkdir()
