@@ -88,6 +88,15 @@ class ParamType:
             return {}
         return self._impl.to_derived(theta, context)
 
+    def to_deterministic_physical(
+        self,
+        theta: Any,
+        context: Optional[MappingContext] = None,
+    ):
+        if not hasattr(self._impl, "to_deterministic_physical"):
+            raise TypeError("This param_type does not provide deterministic physical values.")
+        return self._impl.to_deterministic_physical(theta, context)
+
     def to_mu_physical(
         self,
         theta: Any,
@@ -425,6 +434,28 @@ class _StaticParallaxMarginalDistanceParamType:
         context: Optional[MappingContext] = None,
     ):
         return _static_parallax_log_abs_det_with_distance_grid_jax(theta, distances, context)
+
+    def to_deterministic_physical(
+        self,
+        theta: Any,
+        context: Optional[MappingContext] = None,
+    ):
+        theta = np.asarray(theta, dtype=float)
+        tE = theta[1]
+        rho = theta[3]
+        piEN = theta[4]
+        piEE = theta[5]
+        thetaE = float(_thS(context)) / rho
+        piE = np.hypot(piEN, piEE)
+        mu_geo = thetaE / tE * 365.25
+        vN, vE = _vEarth(context)
+        return {
+            "thetaE": thetaE,
+            "piE": piE,
+            "ML": thetaE / (_KAPPA * piE),
+            "mu_N": mu_geo * piEN / piE + thetaE * piE * vN,
+            "mu_E": mu_geo * piEE / piE + thetaE * piE * vE,
+        }
 
     def to_physical(
         self,

@@ -39,8 +39,11 @@ class FlowSourceDistanceGrid:
     """Bilinearly interpolated source-distance measures over a sightline grid.
 
     ``source_by_component`` has shape ``(b, l, distance, component)`` and is
-    evaluated before CMD selection. A published Flow release also includes
-    the DS-dependent lens-column normalization needed by its base kernel.
+    evaluated before CMD selection. In a published Flow release it is the
+    *event-effective* source measure: the physical forward-source factor
+    ``nMS * 1e-6 * DS**2`` multiplied by the DS-dependent integrated lens
+    column. The latter is needed because the bundled Flow kernel is
+    conditional on DS and source group, not on a lens component.
     """
 
     l_deg: jnp.ndarray
@@ -57,10 +60,12 @@ class FlowSourceDistanceGrid:
         distance_pc: np.ndarray,
         nms_by_sightline: np.ndarray,
     ) -> "FlowSourceDistanceGrid":
-        """Build the raw source grid from ``calc_rho_profile SOURCE=0`` output.
+        """Build the raw (non-event-weighted) source grid from rho profiles.
 
         ``nms_by_sightline`` has shape ``(b, l, distance, component)`` and
-        stores the eleven ``nMS`` columns from rho profiles.
+        stores the eleven ``nMS`` columns from rho profiles. This helper is
+        appropriate for histogram-style source priors; a Flow release must
+        additionally multiply by its integrated lens column before packaging.
         """
 
         distance_pc = np.asarray(distance_pc, dtype=float)

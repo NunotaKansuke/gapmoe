@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 from gapmoe.density import HistogramDensity
-from gapmoe.density.histogram import HistogramDensity as CompatHistogramDensity
 from gapmoe.density.histogram_tables import HistogramTables
 from gapmoe.priors.cmd import CmdGalacticModel
 from gapmoe.priors.galactic import GalacticModel
@@ -29,10 +28,6 @@ def histogram_density() -> HistogramDensity:
 def raw_point() -> tuple[float, float, float, float, float]:
     ml, dl, ds, mu, phi = POINT_MU_PHI
     return ml, dl, ds, mu * cos(phi), mu * sin(phi)
-
-
-def test_histogram_import_is_jax_backend() -> None:
-    assert HistogramDensity is CompatHistogramDensity
 
 
 def test_histogram_prior_is_finite(histogram_density: HistogramDensity) -> None:

@@ -17,10 +17,8 @@ from gapmoe.param_types import (
     calc_vEarth,
     from_model_spec,
 )
-from gapmoe import BinaryCircularParamType as _top_level_import
-from gapmoe import GalacticModel
-from gapmoe import JaxGalacticModel
-from gapmoe import ParamType as _top_level_impl_import
+from gapmoe.priors.galactic import GalacticModel
+from gapmoe.priors.mapped import MappedGalacticModel
 
 
 # Representative context: values at event peak
@@ -111,9 +109,9 @@ _THETA_STATIC_NO_PARALLAX_SAMPLE_DISTANCE = jnp.array([
 ])
 
 
-def test_top_level_import():
-    assert _top_level_import is BinaryCircularParamType
-    assert _top_level_impl_import is ParamType
+def test_parameter_type_imports():
+    assert BinaryCircularParamType is not None
+    assert ParamType is not None
 
 
 def test_binary_circular_names():
@@ -403,6 +401,42 @@ def test_galactic_prior_exposes_physical_and_transform_apis():
     assert logp_theta == pytest.approx(logp_physical + float(log_jacobian))
 
 
+def test_galactic_prior_exposes_only_deterministic_values_for_static_parallax_marginalized_distance():
+    prior = GalacticModel(
+        _DummyDensity(),
+        param_type=ParamType(parallax=True, distance="marginalize"),
+        include_event_rate=False,
+    )
+
+    values = prior.to_deterministic_physical(_THETA_SINGLE[:-1], context=_CTX)
+
+    assert set(values) == {"thetaE", "piE", "ML", "mu_N", "mu_E"}
+    assert values["thetaE"] == pytest.approx(float(_CTX["thS"] / _THETA_SINGLE[3]))
+    assert values["piE"] == pytest.approx(float(jnp.hypot(_THETA_SINGLE[4], _THETA_SINGLE[5])))
+    assert "DL" not in values
+    assert "DS" not in values
+
+
+def test_galactic_prior_exposes_only_deterministic_values_for_no_parallax_marginalized_distance():
+    prior = GalacticModel(
+        _DummyDensity(),
+        param_type=ParamType(parallax=False),
+        include_event_rate=False,
+    )
+
+    values = prior.to_deterministic_physical(
+        _THETA_STATIC_NO_PARALLAX,
+        context={"thS": 0.5},
+    )
+
+    assert set(values) == {"thetaE", "mu"}
+    assert values["thetaE"] == pytest.approx(100.0)
+    assert values["mu"] == pytest.approx(730.5)
+    assert "ML" not in values
+    assert "DL" not in values
+    assert "DS" not in values
+
+
 def test_galactic_prior_samples_orbital_derived_parameters():
     prior = GalacticModel(
         _DummyDensity(),
@@ -584,7 +618,7 @@ def test_galactic_prior_no_parallax_can_sample_distances():
 
 
 def test_jax_prior_with_binary_impl_is_jittable():
-    prior = JaxGalacticModel(
+    prior = MappedGalacticModel(
         _DummyJaxDensity(),
         param_type=BinaryCircularParamType(),
         include_event_rate=False,
@@ -599,7 +633,7 @@ def test_jax_prior_with_binary_impl_is_jittable():
 
 
 def test_jax_galactic_prior_exposes_physical_and_transform_apis():
-    prior = JaxGalacticModel(
+    prior = MappedGalacticModel(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=True),
         include_event_rate=False,
@@ -621,7 +655,7 @@ def test_jax_galactic_prior_exposes_physical_and_transform_apis():
 
 
 def test_jax_galactic_prior_parallax_static_can_marginalize_ds():
-    prior = JaxGalacticModel(
+    prior = MappedGalacticModel(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=True, distance="marginalize"),
         include_event_rate=False,
@@ -636,7 +670,7 @@ def test_jax_galactic_prior_parallax_static_can_marginalize_ds():
 
 
 def test_jax_galactic_prior_no_parallax_marginalizes_distances_by_default():
-    prior = JaxGalacticModel(
+    prior = MappedGalacticModel(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,

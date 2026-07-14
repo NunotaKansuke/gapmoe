@@ -173,6 +173,52 @@ class GalacticModel:
             return {}
         return _coerce_derived(self.param_type.to_derived(theta, context))
 
+    def to_deterministic_physical(
+        self,
+        theta: Any,
+        *,
+        context: Optional[MappingContext] = None,
+    ) -> dict[str, float]:
+        """Return physical values that are deterministic for this theta.
+
+        Marginalized hidden variables are intentionally omitted. For example,
+        a distance-marginalized parallax model returns ``ML``, ``mu_N``,
+        ``mu_E``, ``thetaE``, and ``piE`` but not ``DL`` or ``DS``.
+        """
+        if self.param_type is None:
+            ML, DL, DS, mu_N, mu_E = _raw_values(theta, ())
+            return {
+                "ML": ML,
+                "DL": DL,
+                "DS": DS,
+                "mu_N": mu_N,
+                "mu_E": mu_E,
+            }
+
+        if hasattr(self.param_type, "to_deterministic_physical"):
+            try:
+                return _coerce_derived(
+                    self.param_type.to_deterministic_physical(theta, context)
+                )
+            except TypeError:
+                pass
+
+        if self._uses_theta_mu_physical(()):
+            thetaE, mu = self.to_theta_mu_physical(theta, context=context)
+            return {"thetaE": thetaE, "mu": mu}
+
+        if self._uses_mu_physical(()):
+            ML, DL, DS, mu = self.to_mu_physical(theta, context=context)
+            return {"ML": ML, "DL": DL, "DS": DS, "mu": mu}
+
+        physical = self.to_physical(theta, context=context)
+        keys = ["ML", "DL", "DS", "mu_N", "mu_E"]
+        keys.extend(getattr(self.param_type, "derived_names", ()))
+        return {
+            key: value
+            for key, value in zip(keys, physical)
+        }
+
     def to_mu_physical(
         self,
         theta: Any,
