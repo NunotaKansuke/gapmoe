@@ -21,7 +21,7 @@ class FlowPackageManifest:
     binary: int
     event_kernel: str
     source_distance_grid: str
-    cmd_prior: str
+    cmd_prior: str | None
     validation: dict[str, Any]
 
     @classmethod
@@ -39,7 +39,7 @@ class FlowPackageManifest:
             binary=int(options["binary"]),
             event_kernel=str(payload["event_kernel"]),
             source_distance_grid=str(payload["source_distance_grid"]),
-            cmd_prior=str(payload["cmd_prior"]),
+            cmd_prior=str(payload["cmd_prior"]) if payload.get("cmd_prior") else None,
             validation=dict(payload.get("validation", {})),
         )
 
@@ -53,11 +53,21 @@ class FlowPackage:
     def open(cls, root: str | Path) -> "FlowPackage":
         root = Path(root)
         manifest = FlowPackageManifest.from_json(root / "manifest.json")
-        required = (root / manifest.event_kernel, root / manifest.source_distance_grid, root / manifest.cmd_prior)
+        required = [root / manifest.event_kernel, root / manifest.source_distance_grid]
+        if manifest.cmd_prior is not None:
+            required.append(root / manifest.cmd_prior)
         missing = [str(path.name) for path in required if not path.exists()]
         if missing:
             raise FileNotFoundError(f"incomplete flow package {root}: missing {', '.join(missing)}")
         return cls(root=root, manifest=manifest)
+
+    @property
+    def event_kernel_path(self) -> Path:
+        return self.root / self.manifest.event_kernel
+
+    @property
+    def source_distance_grid_path(self) -> Path:
+        return self.root / self.manifest.source_distance_grid
 
     @classmethod
     def bundled(cls, release: str = "default") -> "FlowPackage":

@@ -176,7 +176,7 @@ def test_set_flow_checks_the_release_sightline_coverage():
 
     assert model.set_flow() is model
     with pytest.raises(ValueError, match="covers"):
-        model.set(l=5.0)
+        model.set(l=5.5)
 
 
 def test_set_flow_requires_sightline_and_known_release():
@@ -184,6 +184,12 @@ def test_set_flow_requires_sightline_and_known_release():
         Model(genulens_root="../genulens").set_flow()
     with pytest.raises(ValueError, match="unknown flow release"):
         Model(genulens_root="../genulens").set(l=1.0, b=-3.9).set_flow(release="missing")
+
+
+def test_flow_does_not_require_genulens_until_prepare_is_requested():
+    model = Model(backend="cli").set(l=1.0, b=-3.9).set_flow()
+
+    assert model._runner is None
 
 
 def test_remnant_and_binary_are_forwarded_and_must_match_a_flow_release(tmp_path, monkeypatch):

@@ -24,6 +24,8 @@ classifiers = [
 ]
 dependencies = [
   "astropy",
+  "equinox",
+  "flowjax",
   "genulens>=2.0.0a3",
   "jax",
   "numpy",
@@ -54,7 +56,12 @@ Issues = "https://github.com/NunotaKansuke/gapmoe/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gapmoe = ["data/*.txt"]
+gapmoe = [
+  "data/*.txt",
+  "data/flows/default/*.json",
+  "data/flows/default/*.npz",
+  "data/flows/default/event_kernel/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -36,9 +36,7 @@ class FlowRelease:
 
 
 _RELEASES = {
-    # This is the current development grid. The trained artifact will replace
-    # its package payload without changing the public release name.
-    "default": FlowRelease(name="default", l_range_deg=(-4.0, 4.0), b_range_deg=(-6.0, -2.0)),
+    "default": FlowRelease(name="default", l_range_deg=(-5.0, 5.0), b_range_deg=(-6.0, -2.0)),
 }
 
 

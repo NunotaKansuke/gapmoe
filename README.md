@@ -71,7 +71,29 @@ histogram directory:
 model = gapmoe.Model()
 model.set(l=1.0, b=-3.9, extinction={"Imag": 1.2, "Vmag": 2.0})
 model.set_flow()
+
+isochrone = model.isochrone(
+    reference_band="Imag",
+    color_bands=("Vmag", "Imag"),
+    magnitude_range=(15.0, 21.0),
+    color_range=(0.5, 3.0),
+)
+prior = model.galactic_model(isochrone)
+logp = prior.log_density(theta)
+logp_at_source_magnitudes = prior.log_density(
+    theta,
+    magnitudes={"Imag": i_s, "Vmag": v_s},
+)
+kernel_sample = prior.sample_kernel(key, ds=8.0, source_group=2)
+sample = prior.sample(key)
+sample_given_photometry = prior.sample(key, magnitudes={"Imag": i_s, "Vmag": v_s})
 ```
+
+The bundled Flow covers `-5 <= l <= 5` and `-6 <= b <= -2` degrees with
+`REMNANT=0` and `BINARY=0`. It models
+`p(ML, DL, mu_E, mu_N | DS, source group, l, b)`. The source-distance and
+isochrone layers are shared with the histogram backend, so changing the CMD
+selection or supplying current source magnitudes does not retrain the Flow.
 
 Without `magnitudes`, the optional ranges in `isochrone()` define the source
 selection. With named apparent magnitudes, the prior instead conditions the
@@ -120,15 +142,8 @@ For local development:
 pip install -e ".[dev]"
 ```
 
-For the core NumPy backend only:
-
-```bash
-pip install -e .
-```
-
 Optional extras:
 
-- `.[jax]`: JAX histogram/prior backend.
 - `.[examples]`: notebook plotting/sampling dependencies.
 - `.[dev]`: JAX, examples, and pytest.
 

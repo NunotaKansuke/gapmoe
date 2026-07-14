@@ -11,7 +11,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class FlowSourceDistance:
-    """One sightline's component-resolved raw source-distance density."""
+    """One sightline's component-resolved source-distance measure."""
 
     distance_pc: jnp.ndarray
     source_by_component: jnp.ndarray
@@ -36,10 +36,11 @@ class FlowSourceDensity:
 
 @dataclass(frozen=True)
 class FlowSourceDistanceGrid:
-    """Bilinearly interpolated source-distance densities over a sightline grid.
+    """Bilinearly interpolated source-distance measures over a sightline grid.
 
     ``source_by_component`` has shape ``(b, l, distance, component)`` and is
-    the raw ``n_MS * D_S^2`` source density before CMD selection.
+    evaluated before CMD selection. A published Flow release also includes
+    the DS-dependent lens-column normalization needed by its base kernel.
     """
 
     l_deg: jnp.ndarray

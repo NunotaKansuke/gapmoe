@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+import jax
+import jax.numpy as jnp
 
 from gapmoe.source_selection import (
     CmdCoordinates,
@@ -25,6 +27,7 @@ from gapmoe.flow_releases import FlowRelease, get_flow_release
 from gapmoe.flow_package import FlowPackage
 
 from .source import EventPrior5D, SourceCmdPrior
+from .event_rate_backend import log_event_rate_backend
 
 
 Context = Mapping[str, Any] | None
@@ -158,6 +161,42 @@ class GalaxyModel:
             include_event_rate=include_event_rate,
         )
 
+    @classmethod
+    def from_flow_package(
+        cls,
+        package: FlowPackage,
+        *,
+        isochrone: IsochroneModel,
+        l_deg: float,
+        b_deg: float,
+        extinction_at_rc: Mapping[str, float],
+        dm_rc: float | None = None,
+        dust_scale_height_pc: float = 164.0,
+        include_event_rate: bool = True,
+    ) -> "GalaxyModel":
+        """Create a source-aware model from a trained Flow release."""
+
+        from gapmoe.density import EventKernelFlow, FlowDensity
+        from gapmoe.flow_source_grid import FlowSourceDistanceGrid
+
+        source_density = FlowSourceDistanceGrid.load_npz(package.source_distance_grid_path).at(l_deg, b_deg)
+        density = FlowDensity(
+            kernel=EventKernelFlow.load(package.event_kernel_path),
+            distance=source_density.distance,
+            l_deg=float(l_deg),
+            b_deg=float(b_deg),
+        )
+        return cls(
+            density=density,
+            isochrone=isochrone,
+            l_deg=float(l_deg),
+            b_deg=float(b_deg),
+            extinction_at_rc=extinction_at_rc,
+            dm_rc=dm_rc,
+            dust_scale_height_pc=dust_scale_height_pc,
+            include_event_rate=include_event_rate,
+        )
+
     def __post_init__(self) -> None:
         if self.isochrone.table is None:
             raise ValueError("isochrone must be built before constructing GalaxyModel")
@@ -226,6 +265,81 @@ class GalaxyModel:
             ds, reference_magnitude, color, context=context
         )
 
+    def sample_kernel(self, key: Any, *, ds: Any, source_group: int):
+        """Sample the Flow lens kernel at fixed DS and source group.
+
+        The returned order is ``(ML, DL, DS, mu_N, mu_E)``. This method is
+        available only for Flow-backed models and samples the base Galactic
+        kernel before applying the event-rate factor.
+        """
+
+        sampler = getattr(self.density, "sample_kernel", None)
+        if sampler is None:
+            raise TypeError("sample_kernel is available only for Flow-backed models")
+        return sampler(key, ds, source_group)
+
+    def sample(
+        self,
+        key: Any,
+        magnitudes: Mapping[str, Any] | None = None,
+        *,
+        context: Context = None,
+        num_proposals: int = 256,
+    ):
+        """Sample ``(ML, DL, DS, mu_N, mu_E)`` from a Flow-backed prior.
+
+        Source distance and source group are drawn from the configured hard
+        selection, or from the supplied apparent magnitudes.  With event-rate
+        weighting enabled, a small importance-resampling population is used
+        to draw from the same event-rate-weighted density as ``log_density``.
+        """
+
+        if not isinstance(num_proposals, int) or num_proposals < 1:
+            raise ValueError("num_proposals must be a positive integer")
+        if magnitudes is None:
+            sampling_prior = self._selected_prior
+            component_weights = sampling_prior.density.distance.source_by_component
+        else:
+            sampling_prior = self._conditional_prior
+            component_weights = self._component_weights_for_magnitudes(magnitudes, context=context)
+        source_sampler = getattr(sampling_prior.density, "sample_source_group", None)
+        kernel_sampler = getattr(sampling_prior.density, "_sample_kernel", None)
+        if source_sampler is None or kernel_sampler is None:
+            raise TypeError("sample is available only for Flow-backed models")
+
+        n_candidates = num_proposals if self.include_event_rate else 1
+        source_key, kernel_key, choose_key = jax.random.split(jnp.asarray(key), 3)
+        source_keys = jax.random.split(source_key, n_candidates)
+        kernel_keys = jax.random.split(kernel_key, n_candidates)
+        ds, source_group = jax.vmap(
+            lambda sample_key: source_sampler(sample_key, component_weights)
+        )(source_keys)
+        candidates = jax.vmap(kernel_sampler)(kernel_keys, ds, source_group)
+        if not self.include_event_rate:
+            return candidates[0]
+        log_weights = log_event_rate_backend(
+            candidates[:, 0],
+            candidates[:, 1],
+            candidates[:, 2],
+            jnp.hypot(candidates[:, 3], candidates[:, 4]),
+        )
+        return candidates[jax.random.categorical(choose_key, log_weights)]
+
+    def _component_weights_for_magnitudes(
+        self,
+        magnitudes: Mapping[str, Any],
+        *,
+        context: Context,
+    ):
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
+        source_prior = self._conditional_prior.source_prior
+        distance_kpc = self._conditional_prior.density.distance.distance_pc / 1000.0
+        offsets = jax.vmap(lambda ds: source_prior.offset_calculator(ds, context))(distance_kpc)
+        photometric = jax.vmap(
+            lambda offset: source_prior.cmd_prior.density_all_components(reference_magnitude, color, offset)
+        )(offsets)
+        return self._conditional_prior.density.distance.source_by_component * photometric
+
 
 class Model:
     """High-level gapmoe interface for one Galactic line of sight.
@@ -246,12 +360,12 @@ class Model:
         auto_build: bool = False,
         backend: str = "auto",
     ) -> None:
-        self._runner = PreRunner(
-            genulens_root=genulens_root,
-            output_dir=".",
-            auto_build=auto_build,
-            backend=backend,
-        )
+        self._genulens_root = genulens_root
+        self._auto_build = auto_build
+        self._backend = backend
+        # A bundled Flow does not need a local genulens checkout.  Keep the
+        # legacy runner eager only when its location was explicitly supplied.
+        self._runner = self._new_runner() if genulens_root is not None else None
         self.directory: Path | None = None
         self._settings: dict[str, Any] = {"dust_scale_height_pc": 164.0, "remnant": 0, "binary": 0}
         self._explicit_settings: set[str] = set()
@@ -259,6 +373,19 @@ class Model:
         self._prepared: PreRunResult | None = None
         self._flow_release: FlowRelease | None = None
         self._flow_package: FlowPackage | None = None
+
+    def _new_runner(self) -> PreRunner:
+        return PreRunner(
+            genulens_root=self._genulens_root,
+            output_dir=".",
+            auto_build=self._auto_build,
+            backend=self._backend,
+        )
+
+    def _get_runner(self) -> PreRunner:
+        if self._runner is None:
+            self._runner = self._new_runner()
+        return self._runner
 
     def set(self, **settings: Any) -> "Model":
         """Set sightline and extinction values, invalidating prepared tables."""
@@ -347,8 +474,9 @@ class Model:
 
         if not force and self._prepared is not None and options == self._prepare_options:
             return self
-        self._runner.output_dir = self.directory.parent
-        self._prepared = self._runner.run(
+        runner = self._get_runner()
+        runner.output_dir = self.directory.parent
+        self._prepared = runner.run(
             l=self._settings["l"],
             b=self._settings["b"],
             run_name=self.directory.name,
@@ -422,9 +550,15 @@ class Model:
             )
             if self._flow_package is None:
                 self._flow_package = FlowPackage.bundled(self._flow_release.name)
-            raise RuntimeError(
-                "flow package loading is ready, but event-kernel deserialization will be enabled when the trained "
-                "release artifact is added"
+            return GalaxyModel.from_flow_package(
+                self._flow_package,
+                isochrone=isochrone,
+                l_deg=self._settings["l"],
+                b_deg=self._settings["b"],
+                extinction_at_rc=self._extinction_for(isochrone),
+                dm_rc=self._settings.get("dm_rc"),
+                dust_scale_height_pc=self._settings["dust_scale_height_pc"],
+                include_event_rate=include_event_rate,
             )
         if self._prepared is None:
             raise RuntimeError("call prepare() before galactic_model()")
