@@ -10,8 +10,8 @@
     "remnant": 0,
     "binary": 0
   },
-  "training_target": "p(ML, DL, mu_E, mu_N | DS, source_group, l, b); event rate is applied by GalacticModel",
-  "source_measure": "genulens unselected source proposal nMS * sqrt(DS / 8000) * 1e-3 times the integrated total lens-number-density column to DS (gammaDs=0.5); CMD selection is applied at inference",
+  "training_target": "p(ML, DL, mu_E, mu_N | DS, source_group, l, b); the kernel retains DL^2 and GalacticModel applies thetaE * mu",
+  "source_measure": "genulens unselected source proposal nMS * sqrt(DS / 8000) * 1e-3 times the integrated DL^2-weighted total lens-number-density column to DS (gammaDs=0.5); CMD selection is applied at inference",
   "event_kernel": "event_kernel",
   "source_distance_grid": "source_distance_grid.npz",
   "cmd_prior": null,

@@ -6,7 +6,7 @@ from typing import Any, Callable, Mapping, NamedTuple
 import jax.numpy as jnp
 from jax import vmap
 
-from gapmoe.priors.event_rate_backend import log_event_rate_backend
+from gapmoe.priors.event_rate_backend import log_event_rate_backend, log_flow_kernel_rate_backend
 
 
 Context = Mapping[str, Any] | None
@@ -170,5 +170,10 @@ class EventPrior5D:
             )
             value = joint - self.source_prior.log_marginal_density(reference_magnitude, color, context=context)
         if self.include_event_rate:
-            value = value + log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+            rate = (
+                log_flow_kernel_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+                if getattr(self.density, "event_rate_factor_includes_lens_area", False)
+                else log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+            )
+            value = value + rate
         return value

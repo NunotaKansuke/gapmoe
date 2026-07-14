@@ -59,13 +59,14 @@ def main() -> None:
         # Match genulens's unselected source and lens proposals exactly.
         # With no active luminosity-function cut, LineOfSightDensityGrid uses
         # rhoD_S = nMS * sqrt(DS / 8000) * 1e-3 (the default gammaDs=0.5),
-        # while lenses are drawn from total number density rho, not rho*DL^2.
-        # The released kernel is conditional on (DS, source group) after that
-        # proposal and has its DL^2 thetaE mu_rel rate factor removed, so its
-        # companion measure must be source proposal times the lens column.
+        # while lenses are drawn from total number density rho. The released
+        # kernel is conditional on (DS, source group) after removing only
+        # thetaE * mu_rel from genulens weights, so it retains DL^2. Its
+        # companion measure is therefore the source proposal times the
+        # DL^2-weighted lens column.
         source_weight = np.sqrt(distance_pc / 8000.0) * 1.0e-3
         source = rows[:, 1:12] * source_weight[:, None]
-        lens_integrand = rows[:, 24]
+        lens_integrand = rows[:, 24] * 1.0e-6 * distance_pc**2
         lens_column = np.zeros_like(distance_pc)
         lens_column[1:] = np.cumsum(
             0.5 * (lens_integrand[1:] + lens_integrand[:-1]) * np.diff(distance_pc)

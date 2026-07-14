@@ -42,9 +42,10 @@ class FlowSourceDistanceGrid:
     evaluated before CMD selection. In a published Flow release it is the
     *kernel-compatible event source measure*: genulens's unselected source
     proposal (``nMS * sqrt(DS / 8000) * 1e-3`` for its default
-    ``gammaDs=0.5``) multiplied by the DS-dependent column of total lens
-    number density. This matches the measure left after removing
-    ``DL**2 * thetaE * mu_rel`` from the released conditional kernel.
+    ``gammaDs=0.5``) multiplied by the DS-dependent ``DL**2``-weighted
+    column of total lens number density. This matches the measure left after
+    removing ``thetaE * mu_rel`` from the released conditional kernel; that
+    kernel retains the genulens lens-area factor ``DL**2``.
     """
 
     l_deg: jnp.ndarray

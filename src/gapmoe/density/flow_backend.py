@@ -158,6 +158,11 @@ class EventKernelFlow:
 class FlowDensity:
     """Five-dimensional density assembled from a Flow kernel and source grid."""
 
+    # Training removes theta_E * mu_rel, while the conditional kernel keeps
+    # genulens's DL**2 lens-area factor. EventPrior5D uses this marker to
+    # avoid applying that factor a second time.
+    event_rate_factor_includes_lens_area = True
+
     kernel: EventKernelFlow
     distance: FlowSourceDistance
     l_deg: float

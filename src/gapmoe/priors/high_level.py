@@ -27,7 +27,7 @@ from gapmoe.flow_releases import FlowRelease, get_flow_release
 from gapmoe.flow_package import FlowPackage
 
 from .source import EventPrior5D, SourceCmdPrior
-from .event_rate_backend import log_event_rate_backend
+from .event_rate_backend import log_flow_kernel_rate_backend
 
 
 Context = Mapping[str, Any] | None
@@ -317,7 +317,7 @@ class GalaxyModel:
         candidates = jax.vmap(kernel_sampler)(kernel_keys, ds, source_group)
         if not self.include_event_rate:
             return candidates[0]
-        log_weights = log_event_rate_backend(
+        log_weights = log_flow_kernel_rate_backend(
             candidates[:, 0],
             candidates[:, 1],
             candidates[:, 2],
