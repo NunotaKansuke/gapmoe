@@ -25,7 +25,7 @@ jobs:
       - name: Run tests
         run: pytest -q
 
-  core-install:
+  flow-install:
     runs-on: ubuntu-latest
 
     steps:
@@ -38,38 +38,34 @@ jobs:
       - name: Install package without extras
         run: python -m pip install .
 
-      - name: Smoke test core backend without JAX
+      - name: Smoke test bundled Flow release
         run: |
           python - <<'PY'
-          import importlib.util
-          from pathlib import Path
-          import tempfile
+          import jax
+          import numpy as np
+          import gapmoe
+          from gapmoe.priors.high_level import IsochroneModel
+          from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
-          from gapmoe import PreRunner
-          from gapmoe.density import HistogramDensity
-
-          assert importlib.util.find_spec("jax") is None
-
-          out = Path(tempfile.mkdtemp(prefix="gapmoe-core-ci-"))
-          runner = PreRunner(output_dir=out)
-          pre_run = runner.run(
-              l=1.0,
-              b=-3.9,
-              run_name="smoke",
-              distance_max_pc=1000,
-              rho_step_pc=500,
-              murel_distance_step_pc=500,
-              d_min_pc=500,
-              dl_min_pc=0,
-              ds_min_pc=500,
-              n_simu=100,
-              mu_max_masyr=20,
-              dmu_masyr=5,
-              autoerr=False,
+          model = gapmoe.Model().set(
+              l=0.25,
+              b=-3.75,
+              extinction={"Imag": 1.2, "Vmag": 2.0},
+          ).set_flow()
+          isochrone = IsochroneModel(
+              reference_band="Imag",
+              color_bands=("Vmag", "Imag"),
+              table=CmdPriorTable(
+                  coordinates=CmdCoordinates("Imag", "Vmag", "Imag"),
+                  reference_edges=np.linspace(-8.0, 20.0, 57),
+                  color_edges=np.linspace(-2.0, 8.0, 41),
+                  density_by_component=np.full((11, 56, 40), 1.0 / 280.0),
+                  component_indices=np.arange(11),
+              ),
           )
-          density = HistogramDensity.from_pre_run(pre_run)
-          assert runner.backend == "python"
-          assert density.murel.rows.shape[1] == 6
+          prior = model.galactic_model(isochrone)
+          assert np.isfinite(prior.log_density(np.asarray((0.3, 4.0, 8.0, 3.0, -2.0))))
+          assert prior.sample_kernel(jax.random.key(0), ds=8.0, source_group=2).shape == (5,)
           PY
 
   build:
