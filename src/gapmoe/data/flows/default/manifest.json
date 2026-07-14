@@ -11,7 +11,7 @@
     "binary": 0
   },
   "training_target": "p(ML, DL, mu_E, mu_N | DS, source_group, l, b); event rate is applied by GalacticModel",
-  "source_measure": "nMS * 1e-6 * DS^2 times the integrated lens column to DS; CMD selection is applied at inference",
+  "source_measure": "genulens unselected source proposal nMS * sqrt(DS / 8000) * 1e-3 times the integrated total lens-number-density column to DS (gammaDs=0.5); CMD selection is applied at inference",
   "event_kernel": "event_kernel",
   "source_distance_grid": "source_distance_grid.npz",
   "cmd_prior": null,

@@ -47,3 +47,15 @@ def test_source_distance_grid_builds_raw_density_from_rho_nms():
     values = np.asarray(grid.source_by_component)
     assert np.allclose(values[0, 0, 0], 1.0)
     assert np.allclose(values[0, 0, 1], 4.0)
+
+
+def test_flow_samples_keep_lens_strictly_in_front_of_source():
+    from gapmoe.density.flow_backend import ResidualTransform
+
+    transform = ResidualTransform(mean=(0.0, 0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0, 1.0))
+    values = transform.from_unconstrained(
+        jnp.asarray((0.0, 100.0, 0.0, 0.0), dtype=jnp.float32),
+        jnp.asarray((0.0, 0.0, 8.0, 1.0, 0.0, 0.0, 0.0, 0.0), dtype=jnp.float32),
+    )
+    assert float(values[1]) < 8.0
+    assert float(1.0 / values[1] - 1.0 / jnp.float32(8.0)) > 0.0

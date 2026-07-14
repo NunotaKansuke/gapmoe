@@ -40,10 +40,11 @@ class FlowSourceDistanceGrid:
 
     ``source_by_component`` has shape ``(b, l, distance, component)`` and is
     evaluated before CMD selection. In a published Flow release it is the
-    *event-effective* source measure: the physical forward-source factor
-    ``nMS * 1e-6 * DS**2`` multiplied by the DS-dependent integrated lens
-    column. The latter is needed because the bundled Flow kernel is
-    conditional on DS and source group, not on a lens component.
+    *kernel-compatible event source measure*: genulens's unselected source
+    proposal (``nMS * sqrt(DS / 8000) * 1e-3`` for its default
+    ``gammaDs=0.5``) multiplied by the DS-dependent column of total lens
+    number density. This matches the measure left after removing
+    ``DL**2 * thetaE * mu_rel`` from the released conditional kernel.
     """
 
     l_deg: jnp.ndarray
@@ -64,8 +65,8 @@ class FlowSourceDistanceGrid:
 
         ``nms_by_sightline`` has shape ``(b, l, distance, component)`` and
         stores the eleven ``nMS`` columns from rho profiles. This helper is
-        appropriate for histogram-style source priors; a Flow release must
-        additionally multiply by its integrated lens column before packaging.
+        appropriate for histogram-style physical source priors; it does not
+        construct the sampler-compatible Flow release measure.
         """
 
         distance_pc = np.asarray(distance_pc, dtype=float)

@@ -70,8 +70,16 @@ class ResidualTransform(StandardTransform):
     def from_unconstrained(self, values: Any, condition: Any):
         raw = jnp.asarray(values) * jnp.asarray(self.std) + jnp.asarray(self.mean)
         ds = jnp.asarray(condition)[..., 2]
+        # In the default float32 JAX mode, a very large positive logit can
+        # round ``DS * sigmoid(logit)`` back to DS. Keep the sampled lens
+        # distance strictly inside its physical support so downstream
+        # calculations of 1/DL - 1/DS cannot acquire a negative radicand.
+        dl = jnp.minimum(
+            ds * jax.nn.sigmoid(raw[..., 1]),
+            jnp.nextafter(ds, jnp.zeros_like(ds)),
+        )
         return jnp.stack(
-            (jnp.exp(raw[..., 0]), ds * jax.nn.sigmoid(raw[..., 1]), raw[..., 2], raw[..., 3]),
+            (jnp.exp(raw[..., 0]), dl, raw[..., 2], raw[..., 3]),
             axis=-1,
         )
 

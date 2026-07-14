@@ -45,16 +45,19 @@ sample_given_photometry = prior.sample(
 The release covers `-5 <= l <= 5` and `-6 <= b <= -2` degrees with
 `REMNANT=0` and `BINARY=0`. It models
 `p(ML, DL, mu_E, mu_N | DS, source_group, l, b)`. The packaged source-distance
-measure is the physical source factor `nMS * 1e-6 * DS**2` times the integrated
-lens column to `DS`; the Flow supplies lens parameters conditional on that
-source. CMD selection and supplied source photometry are applied at inference,
-so neither requires retraining.
+measure matches the unselected genulens proposal used to train this release:
+`nMS * sqrt(DS / 8000) * 1e-3` times the integrated total lens-number-density
+column to `DS` (the default `gammaDs=0.5`). The Flow supplies lens parameters
+conditional on that source. CMD selection and supplied source photometry are
+applied at inference, so neither requires retraining.
 
 `sample_kernel(key, ds=..., source_group=...)` is the fixed-`DS`, fixed-group
 diagnostic sampler. Source-group indices are thin, thick, bulge, NSD, and halo
 in that order (0 through 4). `sample()` draws a source distance/group first;
-with the default event-rate option it uses importance resampling. Increase
-`num_proposals` for precision Monte Carlo work.
+with the default event-rate option it uses importance resampling. This
+rate-removed release is intended for prior evaluation and modest diagnostic
+sampling; do not use `sample()` as the bulk proposal for high-precision,
+rate-weighted or exponentially tilted Monte Carlo.
 
 `log_density(..., magnitudes=...)` conditions the event prior on the supplied
 photometry, but does not include the photometry as an additional source prior.

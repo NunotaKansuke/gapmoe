@@ -68,8 +68,10 @@ CMD selection or supplied photometry, then samples the Flow kernel. With the
 default event-rate weighting it uses 256 Flow proposals and importance
 resampling by the same event-rate factor as `log_density`, approximating the
 event-rate-weighted distribution. `num_proposals` can be increased for
-high-precision Monte Carlo work. If `include_event_rate=False` was passed to
-`galactic_model`, it draws directly from the base kernel.
+diagnostic sampling, but this rate-removed release is not an efficient bulk
+proposal for high-precision, rate-weighted or exponentially tilted Monte
+Carlo. If `include_event_rate=False` was passed to `galactic_model`, it draws
+directly from the base kernel.
 
 The Flow path intentionally does not require a local genulens checkout. The
 histogram path remains:
@@ -99,6 +101,12 @@ Training used 15 million balanced samples, three million per source group.
 The source data used `NSD=1`, `SMALLGAMMA=1`, `REMNANT=0`, and `BINARY=0`.
 The event-rate factor was removed from the training weights so it can be
 applied by `GalaxyModel` at inference time.
+
+The companion source-distance grid is deliberately sampler-compatible rather
+than a physical volume-density table: for the unselected `gammaDs=0.5`
+configuration it is `nMS * sqrt(DS / 8000) * 1e-3` times the integrated total
+lens-number-density column to `DS`. This is the measure that remains after
+removing `DL**2 * thetaE * mu_rel` from genulens event weights.
 
 Independent midpoint validation used new genulens seeds:
 
