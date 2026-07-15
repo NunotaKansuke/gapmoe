@@ -891,13 +891,10 @@ class HistogramTables:
         log_mass = np.zeros_like(mass, dtype=float)
         log_mass[positive] = np.log10(mass[positive])
         for i in range(self.mass.pdf_mass_by_component.shape[1]):
-            out[..., i] = np.interp(
-                log_mass,
-                self.mass.log_mass,
-                self.mass.pdf_mass_by_component[:, i],
-                left=0.0,
-                right=0.0,
-            )
+            out[..., i] = np.vectorize(
+                lambda value: _interp_mass_tail(value, self.mass.log_mass, self.mass.pdf_mass_by_component[:, i]),
+                otypes=[float],
+            )(log_mass)
         out[~positive, :] = 0.0
         return np.sum(out * component_fractions, axis=-1)
 
@@ -1045,12 +1042,23 @@ def _interp_unique_array(value: np.ndarray, x: Iterable[float], y: Iterable[floa
 
 
 def _tail_rates(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    if len(x) < 2:
+    """Return robust exponential decay rates (units: inverse ``x``)."""
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) < 2:
         return 1.0, 1.0
-    left_step, right_step = max(x[1] - x[0], 1e-12), max(x[-1] - x[-2], 1e-12)
-    left = max((np.log(max(y[1], 1e-300)) - np.log(max(y[0], 1e-300))) / left_step, 1.0 / left_step)
-    right = max((np.log(max(y[-2], 1e-300)) - np.log(max(y[-1], 1e-300))) / right_step, 1.0 / right_step)
+    left_idx, right_idx = positive[:3], positive[-3:]
+    left_step = max(float(np.median(np.diff(x[left_idx]))), 1e-12)
+    right_step = max(float(np.median(np.diff(x[right_idx]))), 1e-12)
+    left = np.clip(np.polyfit(x[left_idx], np.log(y[left_idx]), 1)[0], 1.0 / (3.0 * left_step), 5.0 / left_step)
+    right = np.clip(-np.polyfit(x[right_idx], np.log(y[right_idx]), 1)[0], 1.0 / (3.0 * right_step), 5.0 / right_step)
     return float(left), float(right)
+
+
+def _positive_support(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) == 0:
+        return x[:0], y[:0]
+    return x[positive[0] : positive[-1] + 1], y[positive[0] : positive[-1] + 1]
 
 
 def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> float:
@@ -1059,6 +1067,9 @@ def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], 
 
 def _interp_positive_tail_array(value: np.ndarray, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> np.ndarray:
     x_arr, y_arr = np.asarray(list(x), dtype=float), np.asarray(list(y), dtype=float)
+    if len(x_arr) == 0:
+        return np.zeros_like(value, dtype=float)
+    x_arr, y_arr = _positive_support(x_arr, y_arr)
     if len(x_arr) == 0:
         return np.zeros_like(value, dtype=float)
     left_rate, right_rate = _tail_rates(x_arr, y_arr)
@@ -1095,6 +1106,9 @@ def _integral_with_tails(x: np.ndarray, y: np.ndarray, *, lower: float | None, u
         left_rate, right_rate = _tail_rates(x, y)
         ln10 = np.log(10.0)
         return float(_trapz(y, measure) + y[0] * ln10 * 10.0**x[0] / (left_rate + ln10) + y[-1] * ln10 * 10.0**x[-1] / (max(right_rate, ln10 + 1e-12) - ln10))
+    x, y = _positive_support(x, y)
+    if len(x) == 0:
+        return 0.0
     left_rate, right_rate = _tail_rates(x, y)
     left = y[0] / left_rate * (1.0 - np.exp(-left_rate * max(x[0] - (0.0 if lower is None else lower), 0.0)))
     if upper is None:
