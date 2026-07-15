@@ -246,7 +246,7 @@ def test_histogram_tails_are_positive_normalised_and_match_jax(histogram_density
         assert float(histogram_density.distance.source_pdf(value)) > 0.0
 
     grid = np.linspace(0.0, distance[-1] / 1000.0 + 50.0, 20_001)
-    integrate = getattr(np, "trapezoid", np.trapz)
+    integrate = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
     assert integrate([float(histogram_density.distance.source_pdf(value)) for value in grid], grid) == pytest.approx(1.0, rel=2e-3)
 
 
