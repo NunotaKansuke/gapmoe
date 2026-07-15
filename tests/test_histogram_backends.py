@@ -77,6 +77,45 @@ def test_jax_histogram_matches_numpy(histogram_density: HistogramDensity) -> Non
     assert jit_log_prob == pytest.approx(numpy_log_prob, rel=1e-5, abs=1e-5)
 
 
+def test_histogram_tails_are_positive_normalised_and_match_jax(histogram_density: HistogramDensity) -> None:
+    jax = pytest.importorskip("jax")
+    from gapmoe import JaxHistogramDensity
+
+    numpy_density = histogram_density
+    jax_density = JaxHistogramDensity.from_numpy(numpy_density)
+    distance = numpy_density.distance.distance_pc
+    mass = numpy_density.mass.log_mass
+
+    # Just outside either finite table edge remains finite and positive.
+    for value in (10.0 ** (mass[0] - 0.1), 10.0 ** (mass[-1] + 0.1)):
+        assert numpy_density.mass.density_given_component(value).sum() > 0.0
+        assert float(jax_density.mass.density_given_component(value).sum()) == pytest.approx(
+                numpy_density.mass.density_given_component(value).sum(), rel=3e-4
+        )
+    for value in ((distance[0] - 1.0) / 1000.0, (distance[-1] + 100.0) / 1000.0):
+        assert numpy_density.distance.source_pdf(value) > 0.0
+        assert float(jax_density.distance.source_pdf(value)) == pytest.approx(
+            numpy_density.distance.source_pdf(value), rel=1e-5
+        )
+    mu_max = numpy_density.murel.rows[:, 2].max()
+    numpy_mu, _ = numpy_density.murel.densities(0.26, 0.6, mu_max + 1.0, 0.0)
+    jax_mu, _ = jax_density.murel.densities(0.26, 0.6, mu_max + 1.0, 0.0)
+    assert numpy_mu > 0.0
+    assert float(jax_mu) == pytest.approx(numpy_mu, rel=3e-4)
+
+    # The source PDF includes both tails in its normalisation.
+    grid = np.linspace(0.0, distance[-1] / 1000.0 + 50.0, 20_001)
+    integrate = getattr(np, "trapezoid", np.trapz)
+    assert integrate([numpy_density.distance.source_pdf(value) for value in grid], grid) == pytest.approx(1.0, rel=2e-3)
+
+
+def test_histogram_physical_boundaries_remain_zero(histogram_density: HistogramDensity) -> None:
+    assert histogram_density.density_mu_phi(0.0, 0.2, 0.6, 1.0, 0.0) == 0.0
+    assert histogram_density.density_mu_phi(0.3, 0.0, 0.6, 1.0, 0.0) == 0.0
+    assert histogram_density.density_mu_phi(0.3, 0.6, 0.6, 1.0, 0.0) == 0.0
+    assert histogram_density.density_mu_phi(0.3, 0.2, 0.6, 0.0, 0.0) == 0.0
+
+
 def test_jax_histogram_bilinear_murel_is_finite_and_differentiable(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp

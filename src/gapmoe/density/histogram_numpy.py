@@ -46,6 +46,11 @@ class MassHistogram:
                 continue
             pdf_logm = component_density_logm[:, i] / integral_logm
             pdf_mass[:, i] = pdf_logm / (mass * np.log(10.0))
+            # Include the same exponentially decaying tails used at evaluation
+            # time in the normalisation of this physical-mass PDF.
+            normalisation = _integral_with_tails(log_mass, pdf_mass[:, i], lower=None, measure=mass)
+            if normalisation > 0.0:
+                pdf_mass[:, i] /= normalisation
 
         return cls(log_mass=log_mass, pdf_mass_by_component=pdf_mass)
 
@@ -55,7 +60,7 @@ class MassHistogram:
         log_mass = log(mass) / log(10.0)
         return np.array(
             [
-                np.interp(log_mass, self.log_mass, self.pdf_mass_by_component[:, i], left=0.0, right=0.0)
+                _interp_mass_tail(log_mass, self.log_mass, self.pdf_mass_by_component[:, i])
                 for i in range(self.pdf_mass_by_component.shape[1])
             ]
         )
@@ -94,44 +99,48 @@ class DistanceDensityTable:
             source_density=source_density,
             lens_density_total=lens_density_total,
             lens_cumulative_integral=_cumulative_trapezoid(distance_pc, lens_density_total),
-            source_norm=_trapz(source_density, distance_pc),
+            source_norm=_integral_with_tails(distance_pc, source_density, lower=0.0),
         )
 
     def source_pdf(self, ds_kpc: float) -> float:
         if self.source_norm <= 0.0:
             return 0.0
-        val = np.interp(ds_kpc * 1000.0, self.distance_pc, self.source_density, left=0.0, right=0.0)
-        return float(val / self.source_norm)
+        if ds_kpc <= 0.0:
+            return 0.0
+        val = _interp_positive_tail(ds_kpc * 1000.0, self.distance_pc, self.source_density, lower=0.0)
+        return float(1000.0 * val / self.source_norm)
 
     def lens_pdf_given_source(self, dl_kpc: float, ds_kpc: float) -> float:
-        if ds_kpc <= dl_kpc:
+        if dl_kpc <= 0.0 or ds_kpc <= dl_kpc:
             return 0.0
         norm = self._lens_integral_until(ds_kpc)
         if norm <= 0.0:
             return 0.0
-        val = np.interp(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, left=0.0, right=0.0)
-        return float(val / norm)
+        val = _interp_positive_tail(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, lower=0.0)
+        return float(1000.0 * val / norm)
 
     def _lens_integral_until(self, ds_kpc: float) -> float:
         ds_pc = ds_kpc * 1000.0
-        if ds_pc <= self.distance_pc[0]:
+        if ds_pc <= 0.0:
             return 0.0
         if ds_pc >= self.distance_pc[-1]:
-            return float(self.lens_cumulative_integral[-1])
+            return _integral_with_tails(self.distance_pc, self.lens_density_total, lower=0.0, upper=ds_pc)
         base = float(np.interp(ds_pc, self.distance_pc, self.lens_cumulative_integral))
         left_idx = int(np.searchsorted(self.distance_pc, ds_pc, side="right")) - 1
         if left_idx < 0 or self.distance_pc[left_idx] == ds_pc:
             return base
         x0 = self.distance_pc[left_idx]
         y0 = self.lens_density_total[left_idx]
-        y1 = np.interp(ds_pc, self.distance_pc, self.lens_density_total, left=0.0, right=0.0)
+        y1 = _interp_positive_tail(ds_pc, self.distance_pc, self.lens_density_total, lower=0.0)
         partial = 0.5 * (y0 + y1) * (ds_pc - x0)
         return float(self.lens_cumulative_integral[left_idx] + partial)
 
     def component_fractions(self, dl_kpc: float) -> np.ndarray:
+        if dl_kpc <= 0.0:
+            return np.zeros(self.lens_density_by_component.shape[1])
         vals = np.array(
             [
-                np.interp(dl_kpc * 1000.0, self.distance_pc, self.lens_density_by_component[:, i], left=0.0, right=0.0)
+                _interp_positive_tail(dl_kpc * 1000.0, self.distance_pc, self.lens_density_by_component[:, i], lower=0.0)
                 for i in range(self.lens_density_by_component.shape[1])
             ]
         )
@@ -173,12 +182,12 @@ class MurelHistogram:
         )
 
     def densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[float, float]:
-        if ds_kpc <= dl_kpc:
+        if dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
             return 0.0, 0.0
         return self.nearest_densities(dl_kpc, ds_kpc, mu, phi)
 
     def nearest_densities(self, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> tuple[float, float]:
-        if ds_kpc <= dl_kpc:
+        if dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
             return 0.0, 0.0
         pair_pc = self._nearest_pair(dl_kpc * 1000.0, ds_kpc * 1000.0)
         return self._densities_for_pair(pair_pc, mu, phi)
@@ -198,7 +207,7 @@ class MurelHistogram:
         mu_x = block[:, 2]
         mu_y = block[:, 4]
         valid_mu = mu_x > 0.0
-        p_mu = _interp_unique(mu, mu_x[valid_mu], mu_y[valid_mu])
+        p_mu = _interp_positive_tail(mu, mu_x[valid_mu], mu_y[valid_mu], lower=0.0)
 
         phi_x = block[:, 3]
         phi_y = block[:, 5]
@@ -273,6 +282,8 @@ class HistogramDensity(DensityModel):
 
     def density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> float:
         """Return density with respect to dML dDL dDS dmu dphi. Distances in kpc."""
+        if mass <= 0.0 or dl_kpc <= 0.0 or ds_kpc <= dl_kpc or mu <= 0.0:
+            return 0.0
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
@@ -392,17 +403,96 @@ def _cumulative_trapezoid(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     return cumulative
 
 
-def _interp_unique(value: float, x: Iterable[float], y: Iterable[float]) -> float:
+def _tail_rates(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """Positive exponential tails matched to each endpoint value.
+
+    Endpoint log-slopes are used when they point outward; one grid interval is
+    the conservative fallback, so an increasing/noisy endpoint still decays.
+    """
+    if len(x) < 2:
+        return 1.0, 1.0
+    step_left, step_right = max(x[1] - x[0], 1e-12), max(x[-1] - x[-2], 1e-12)
+    left = max((np.log(max(y[1], 1e-300)) - np.log(max(y[0], 1e-300))) / step_left, 1.0 / step_left)
+    right = max((np.log(max(y[-2], 1e-300)) - np.log(max(y[-1], 1e-300))) / step_right, 1.0 / step_right)
+    return float(left), float(right)
+
+
+def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> float:
     x_arr = np.asarray(list(x), dtype=float)
     y_arr = np.asarray(list(y), dtype=float)
-    if len(x_arr) == 0:
+    if len(x_arr) == 0 or (lower is not None and value <= lower):
         return 0.0
     order = np.argsort(x_arr)
     x_sorted = x_arr[order]
     y_sorted = y_arr[order]
     unique_x, unique_idx = np.unique(x_sorted, return_index=True)
     unique_y = y_sorted[unique_idx]
-    return float(np.interp(value, unique_x, unique_y, left=0.0, right=0.0))
+    left_rate, right_rate = _tail_rates(unique_x, unique_y)
+    if value < unique_x[0]:
+        return float(unique_y[0] * np.exp(-left_rate * (unique_x[0] - value)))
+    if value > unique_x[-1]:
+        return float(unique_y[-1] * np.exp(-right_rate * (value - unique_x[-1])))
+    return float(np.interp(value, unique_x, unique_y))
+
+
+def _interp_mass_tail(value: float, x: Iterable[float], y: Iterable[float]) -> float:
+    x_arr = np.asarray(list(x), dtype=float)
+    y_arr = np.asarray(list(y), dtype=float)
+    support = y_arr > 0.0
+    if not np.any(support):
+        return 0.0
+    x_arr, y_arr = x_arr[support], y_arr[support]
+    left_rate, right_rate = _tail_rates(x_arr, y_arr)
+    # dM = ln(10) * 10**log10(M) dlog10(M): the upper tail must beat
+    # ln(10) to remain integrable in physical mass.
+    right_rate = max(right_rate, np.log(10.0) + 1e-12)
+    if value < x_arr[0]:
+        return float(y_arr[0] * np.exp(-left_rate * (x_arr[0] - value)))
+    if value > x_arr[-1]:
+        return float(y_arr[-1] * np.exp(-right_rate * (value - x_arr[-1])))
+    return float(np.interp(value, x_arr, y_arr))
+
+
+def _interp_unique(value: float, x: Iterable[float], y: Iterable[float]) -> float:
+    """Periodic-angle helper: unlike positive PDFs, phi has no tail."""
+    x_arr = np.asarray(list(x), dtype=float)
+    y_arr = np.asarray(list(y), dtype=float)
+    if len(x_arr) == 0:
+        return 0.0
+    order = np.argsort(x_arr)
+    return float(np.interp(value, x_arr[order], y_arr[order], left=0.0, right=0.0))
+
+
+def _integral_with_tails(
+    x: np.ndarray, y: np.ndarray, *, lower: float | None, upper: float | None = None, measure: np.ndarray | None = None
+) -> float:
+    """Integral of a linearly interpolated positive table plus its tails."""
+    if len(x) == 0:
+        return 0.0
+    # Mass tables are parameterised by log10(M), but their PDF is dM.
+    if measure is not None:
+        support = y > 0.0
+        if not np.any(support):
+            return 0.0
+        x, y, measure = x[support], y[support], measure[support]
+        interior = _trapz(y, measure)
+        left_rate, right_rate = _tail_rates(x, y)
+        ln10 = np.log(10.0)
+        left = y[0] * ln10 * 10.0**x[0] / (left_rate + ln10)
+        right_rate = max(right_rate, ln10 + 1e-12)
+        right = y[-1] * ln10 * 10.0**x[-1] / (right_rate - ln10)
+        return float(interior + left + right)
+    left_rate, right_rate = _tail_rates(x, y)
+    lower_limit = 0.0 if lower is None else lower
+    left = y[0] / left_rate * (1.0 - np.exp(-left_rate * max(x[0] - lower_limit, 0.0)))
+    interior = _trapz(y, x)
+    if upper is None:
+        right = y[-1] / right_rate
+    elif upper <= x[-1]:
+        return _integral_until(x, y, upper) + left
+    else:
+        right = y[-1] / right_rate * (1.0 - np.exp(-right_rate * (upper - x[-1])))
+    return float(left + interior + right)
 
 
 def _wrap_phi(phi: float) -> float:
