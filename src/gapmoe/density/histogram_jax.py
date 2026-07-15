@@ -381,8 +381,8 @@ def _padding_step(x: np.ndarray) -> float:
 
 
 def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.ndarray, *, tails: bool = True) -> jnp.ndarray:
-    last = valid_len - 1
-    below = value < x[0]
+    first, last, left_idx, right_idx = _positive_sample_indices(y)
+    below = value < x[first]
     above = value > x[last]
     right = jnp.searchsorted(x, value, side="left")
     exact_idx = jnp.clip(right, 0, last)
@@ -397,8 +397,6 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     interpolated = y0 + (y1 - y0) * (value - x0) / denom
     exact_value = y[exact_idx]
     interpolated = jnp.where(exact, exact_value, interpolated)
-    left_idx = jnp.minimum(jnp.arange(3), last)
-    right_idx = jnp.maximum(last - jnp.arange(2, -1, -1), 0)
     def slope(sample):
         xs, ys = x[sample], jnp.log(jnp.maximum(y[sample], jnp.finfo(y.dtype).tiny))
         centered = xs - jnp.mean(xs)
@@ -407,17 +405,14 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     right_step = jnp.maximum(jnp.median(jnp.diff(x[right_idx])), 1e-12)
     left_rate = jnp.clip(slope(left_idx), 1.0 / (3.0 * left_step), 5.0 / left_step)
     right_rate = jnp.clip(-slope(right_idx), 1.0 / (3.0 * right_step), 5.0 / right_step)
-    tailed = jnp.where(below, y[0] * jnp.exp(-left_rate * (x[0] - value)), jnp.where(above, y[last] * jnp.exp(-right_rate * (value - x[last])), interpolated))
+    tailed = jnp.where(below, y[first] * jnp.exp(-left_rate * (x[first] - value)), jnp.where(above, y[last] * jnp.exp(-right_rate * (value - x[last])), interpolated))
     result = tailed if tails else jnp.where(below | above, 0.0, interpolated)
     return jnp.where(valid_len > 0, result, 0.0)
 
 
 def _tail_rates(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     floor = jnp.finfo(y.dtype).tiny
-    first = jnp.argmax(y > 0.0)
-    last = y.shape[0] - 1 - jnp.argmax((y > 0.0)[::-1])
-    left_idx = jnp.minimum(first + jnp.arange(3), last)
-    right_idx = jnp.maximum(last - jnp.arange(2, -1, -1), first)
+    _, _, left_idx, right_idx = _positive_sample_indices(y)
     def slope(sample):
         xs, ys = x[sample], jnp.log(jnp.maximum(y[sample], floor))
         centered = xs - jnp.mean(xs)
@@ -429,9 +424,20 @@ def _tail_rates(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarra
     return left, right
 
 
+def _positive_sample_indices(y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """First/last and the first/last three *positive* table indices."""
+    positive = y > 0.0
+    indices = jnp.arange(y.shape[0])
+    first = jnp.argmax(positive)
+    last = y.shape[0] - 1 - jnp.argmax(positive[::-1])
+    left = jnp.minimum(jnp.sort(jnp.where(positive, indices, y.shape[0]))[:3], last)
+    right = jnp.maximum(jnp.sort(jnp.where(positive, indices, -1))[-3:], first)
+    return first, last, left, right
+
+
 def _interp_positive_tail(value: float, x: jnp.ndarray, y: jnp.ndarray, *, lower: float | None = None) -> jnp.ndarray:
     left_rate, right_rate = _tail_rates(x, y)
-    first, last = jnp.argmax(y > 0.0), y.shape[0] - 1 - jnp.argmax((y > 0.0)[::-1])
+    first, last, _, _ = _positive_sample_indices(y)
     x0, xn, y0, yn = x[first], x[last], y[first], y[last]
     interior = jnp.interp(value, x, y)
     below = y0 * jnp.exp(-left_rate * (x0 - value))
@@ -442,8 +448,7 @@ def _interp_positive_tail(value: float, x: jnp.ndarray, y: jnp.ndarray, *, lower
 
 def _interp_mass_tail(value: float, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
     support = y > 0.0
-    first = jnp.argmax(support)
-    last = y.shape[0] - 1 - jnp.argmax(support[::-1])
+    first, last, _, _ = _positive_sample_indices(y)
     x0, xn = x[first], x[last]
     y0, yn = y[first], y[last]
     left_rate, right_rate = _tail_rates(x, y)
