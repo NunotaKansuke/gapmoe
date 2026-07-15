@@ -255,3 +255,16 @@ def test_histogram_physical_boundaries_remain_zero(histogram_density: HistogramD
     assert float(histogram_density.density_mu_phi(0.3, 0.0, 0.6, 1.0, 0.0)) == 0.0
     assert float(histogram_density.density_mu_phi(0.3, 0.6, 0.6, 1.0, 0.0)) == 0.0
     assert float(histogram_density.density_mu_phi(0.3, 0.2, 0.6, 0.0, 0.0)) == 0.0
+
+
+def test_jax_tail_uses_noncontiguous_positive_bins_like_numpy() -> None:
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from gapmoe.density.histogram_backend import _interp_positive_tail as jax_tail
+    from gapmoe.density.histogram_tables import _interp_positive_tail as numpy_tail
+
+    x = np.arange(8.0)
+    y = np.asarray([0.0, 0.8, 0.0, 0.4, 0.2, 0.0, 0.1, 0.0])
+    evaluate = jax.jit(lambda value: jax_tail(value, jnp.asarray(x), jnp.asarray(y)))
+    for value in (-0.5, 6.5):
+        assert float(evaluate(value)) == pytest.approx(numpy_tail(value, x, y), rel=3e-5)
