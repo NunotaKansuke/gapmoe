@@ -404,17 +404,25 @@ def _cumulative_trapezoid(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 
 def _tail_rates(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Positive exponential tails matched to each endpoint value.
-
-    Endpoint log-slopes are used when they point outward; one grid interval is
-    the conservative fallback, so an increasing/noisy endpoint still decays.
-    """
-    if len(x) < 2:
+    """Return robust exponential decay rates (units: inverse ``x``)."""
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) < 2:
         return 1.0, 1.0
-    step_left, step_right = max(x[1] - x[0], 1e-12), max(x[-1] - x[-2], 1e-12)
-    left = max((np.log(max(y[1], 1e-300)) - np.log(max(y[0], 1e-300))) / step_left, 1.0 / step_left)
-    right = max((np.log(max(y[-2], 1e-300)) - np.log(max(y[-1], 1e-300))) / step_right, 1.0 / step_right)
+    left_idx, right_idx = positive[:3], positive[-3:]
+    left_step = max(float(np.median(np.diff(x[left_idx]))), 1e-12)
+    right_step = max(float(np.median(np.diff(x[right_idx]))), 1e-12)
+    left_slope = np.polyfit(x[left_idx], np.log(y[left_idx]), 1)[0]
+    right_slope = np.polyfit(x[right_idx], np.log(y[right_idx]), 1)[0]
+    left = np.clip(left_slope, 1.0 / (3.0 * left_step), 5.0 / left_step)
+    right = np.clip(-right_slope, 1.0 / (3.0 * right_step), 5.0 / right_step)
     return float(left), float(right)
+
+
+def _positive_support(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    positive = np.flatnonzero(y > 0.0)
+    if len(positive) == 0:
+        return x[:0], y[:0]
+    return x[positive[0] : positive[-1] + 1], y[positive[0] : positive[-1] + 1]
 
 
 def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], *, lower: float | None = None) -> float:
@@ -427,6 +435,9 @@ def _interp_positive_tail(value: float, x: Iterable[float], y: Iterable[float], 
     y_sorted = y_arr[order]
     unique_x, unique_idx = np.unique(x_sorted, return_index=True)
     unique_y = y_sorted[unique_idx]
+    unique_x, unique_y = _positive_support(unique_x, unique_y)
+    if len(unique_x) == 0:
+        return 0.0
     left_rate, right_rate = _tail_rates(unique_x, unique_y)
     if value < unique_x[0]:
         return float(unique_y[0] * np.exp(-left_rate * (unique_x[0] - value)))
@@ -482,6 +493,9 @@ def _integral_with_tails(
         right_rate = max(right_rate, ln10 + 1e-12)
         right = y[-1] * ln10 * 10.0**x[-1] / (right_rate - ln10)
         return float(interior + left + right)
+    x, y = _positive_support(x, y)
+    if len(x) == 0:
+        return 0.0
     left_rate, right_rate = _tail_rates(x, y)
     lower_limit = 0.0 if lower is None else lower
     left = y[0] / left_rate * (1.0 - np.exp(-left_rate * max(x[0] - lower_limit, 0.0)))

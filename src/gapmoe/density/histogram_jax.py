@@ -406,19 +406,29 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
 
 def _tail_rates(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     floor = jnp.finfo(y.dtype).tiny
-    left_step = jnp.maximum(x[1] - x[0], 1e-12)
-    right_step = jnp.maximum(x[-1] - x[-2], 1e-12)
-    left = jnp.maximum((jnp.log(jnp.maximum(y[1], floor)) - jnp.log(jnp.maximum(y[0], floor))) / left_step, 1.0 / left_step)
-    right = jnp.maximum((jnp.log(jnp.maximum(y[-2], floor)) - jnp.log(jnp.maximum(y[-1], floor))) / right_step, 1.0 / right_step)
+    first = jnp.argmax(y > 0.0)
+    last = y.shape[0] - 1 - jnp.argmax((y > 0.0)[::-1])
+    left_idx = jnp.minimum(first + jnp.arange(3), last)
+    right_idx = jnp.maximum(last - jnp.arange(2, -1, -1), first)
+    def slope(sample):
+        xs, ys = x[sample], jnp.log(jnp.maximum(y[sample], floor))
+        centered = xs - jnp.mean(xs)
+        return jnp.sum(centered * (ys - jnp.mean(ys))) / jnp.maximum(jnp.sum(centered * centered), 1e-12)
+    left_step = jnp.maximum(jnp.median(jnp.diff(x[left_idx])), 1e-12)
+    right_step = jnp.maximum(jnp.median(jnp.diff(x[right_idx])), 1e-12)
+    left = jnp.clip(slope(left_idx), 1.0 / (3.0 * left_step), 5.0 / left_step)
+    right = jnp.clip(-slope(right_idx), 1.0 / (3.0 * right_step), 5.0 / right_step)
     return left, right
 
 
 def _interp_positive_tail(value: float, x: jnp.ndarray, y: jnp.ndarray, *, lower: float | None = None) -> jnp.ndarray:
     left_rate, right_rate = _tail_rates(x, y)
+    first, last = jnp.argmax(y > 0.0), y.shape[0] - 1 - jnp.argmax((y > 0.0)[::-1])
+    x0, xn, y0, yn = x[first], x[last], y[first], y[last]
     interior = jnp.interp(value, x, y)
-    below = y[0] * jnp.exp(-left_rate * (x[0] - value))
-    above = y[-1] * jnp.exp(-right_rate * (value - x[-1]))
-    result = jnp.where(value < x[0], below, jnp.where(value > x[-1], above, interior))
+    below = y0 * jnp.exp(-left_rate * (x0 - value))
+    above = yn * jnp.exp(-right_rate * (value - xn))
+    result = jnp.where(value < x0, below, jnp.where(value > xn, above, interior))
     return jnp.where(value > lower, result, 0.0) if lower is not None else result
 
 
@@ -428,13 +438,7 @@ def _interp_mass_tail(value: float, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarr
     last = y.shape[0] - 1 - jnp.argmax(support[::-1])
     x0, xn = x[first], x[last]
     y0, yn = y[first], y[last]
-    left_index = jnp.minimum(first + 1, last)
-    right_index = jnp.maximum(last - 1, first)
-    floor = jnp.finfo(y.dtype).tiny
-    left_step = jnp.maximum(x[left_index] - x0, 1e-12)
-    right_step = jnp.maximum(xn - x[right_index], 1e-12)
-    left_rate = jnp.maximum((jnp.log(jnp.maximum(y[left_index], floor)) - jnp.log(jnp.maximum(y0, floor))) / left_step, 1.0 / left_step)
-    right_rate = jnp.maximum((jnp.log(jnp.maximum(y[right_index], floor)) - jnp.log(jnp.maximum(yn, floor))) / right_step, 1.0 / right_step)
+    left_rate, right_rate = _tail_rates(x, y)
     right_rate = jnp.maximum(right_rate, jnp.log(10.0) + 1e-12)
     interior = jnp.interp(value, x, y)
     below = y0 * jnp.exp(-left_rate * (x0 - value))
