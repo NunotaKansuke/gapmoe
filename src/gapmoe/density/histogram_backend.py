@@ -333,7 +333,7 @@ class MurelHistogram:
             source_group_weights = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0])
         if self.interpolation == "bilinear":
             p_mu, p_phi = self._bilinear_densities(dl_kpc, ds_kpc, mu, phi)
-            valid = ds_kpc > dl_kpc
+            valid = (dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0)
             return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
 
         idx = self._nearest_pair_index(dl_kpc, ds_kpc)
@@ -341,7 +341,7 @@ class MurelHistogram:
         p_phi = _interp_padded_group(
             _wrap_phi(phi), self.phi_x[idx], self.source_phi_y[idx], self.phi_len[idx], source_group_weights
         )
-        valid = ds_kpc > dl_kpc
+        valid = (dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0)
         return jnp.where(valid, p_mu, 0.0), jnp.where(valid, p_phi, 0.0)
 
     def mu_density(
@@ -351,11 +351,11 @@ class MurelHistogram:
             source_group_weights = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0])
         if self.interpolation == "bilinear":
             p_mu = self._bilinear_mu_density(dl_kpc, ds_kpc, mu)
-            return jnp.where(ds_kpc > dl_kpc, p_mu, 0.0)
+            return jnp.where((dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0), p_mu, 0.0)
 
         idx = self._nearest_pair_index(dl_kpc, ds_kpc)
         p_mu = _interp_padded_group(mu, self.mu_x[idx], self.source_mu_y[idx], self.mu_len[idx], source_group_weights)
-        return jnp.where(ds_kpc > dl_kpc, p_mu, 0.0)
+        return jnp.where((dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0), p_mu, 0.0)
 
     def mu_density_for_pair_indices(
         self, pair_indices: jnp.ndarray, mu: float, source_group_weights: jnp.ndarray
@@ -599,7 +599,7 @@ class HistogramDensity:
         p_dl = self.distance.lens_pdf_given_source(DL, DS)
         p_mu, p_phi = self.murel.densities(DL, DS, mu, phi, group_weights)
         value = 1000.0 * p_mass * p_dl * source_density * p_mu * p_phi / mu
-        valid = (mu > 0.0) & (DS > DL) & (self.distance.source_norm > 0.0)
+        valid = (ML > 0.0) & (DL > 0.0) & (mu > 0.0) & (DS > DL) & (self.distance.source_norm > 0.0)
         return jnp.where(valid, value, 0.0)
 
     def log_cmd_joint_density(self, *args, **kwargs) -> jnp.ndarray:
@@ -648,13 +648,14 @@ class HistogramDensity:
 
     def density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> jnp.ndarray:
         """Return density with respect to dML dDL dDS dmu dphi. Distances in kpc."""
+        valid = (mass > 0.0) & (dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0)
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
         p_mu, p_phi = self.murel.densities(
             dl_kpc, ds_kpc, mu, phi, self.distance.source_group_weights(ds_kpc)
         )
-        return p_mass * p_dl * p_ds * p_mu * p_phi
+        return jnp.where(valid, p_mass * p_dl * p_ds * p_mu * p_phi, 0.0)
 
     def log_density_mu_phi(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float, phi: float) -> jnp.ndarray:
         """Return log density with respect to dML dDL dDS dmu dphi. Distances in kpc."""
@@ -663,11 +664,12 @@ class HistogramDensity:
 
     def density_mu(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float) -> jnp.ndarray:
         """Return density with respect to dML dDL dDS dmu, marginalized over phi."""
+        valid = (mass > 0.0) & (dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (mu > 0.0)
         p_mass = self.mass_density_given_dl(mass, dl_kpc)
         p_dl = self.distance.lens_pdf_given_source(dl_kpc, ds_kpc)
         p_ds = self.distance.source_pdf(ds_kpc)
         p_mu = self.murel.mu_density(dl_kpc, ds_kpc, mu, self.distance.source_group_weights(ds_kpc))
-        return p_mass * p_dl * p_ds * p_mu
+        return jnp.where(valid, p_mass * p_dl * p_ds * p_mu, 0.0)
 
     def log_density_mu(self, mass: float, dl_kpc: float, ds_kpc: float, mu: float) -> jnp.ndarray:
         """Return log density with respect to dML dDL dDS dmu, marginalized over phi."""
