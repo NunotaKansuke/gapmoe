@@ -887,14 +887,16 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     exact_value = y[exact_idx]
     interpolated = jnp.where(exact, exact_value, interpolated)
     floor = jnp.finfo(y.dtype).tiny
-    left_rate = jnp.maximum(
-        (jnp.log(jnp.maximum(y[1], floor)) - jnp.log(jnp.maximum(y[0], floor))) / jnp.maximum(x[1] - x[0], 1e-12),
-        1.0 / jnp.maximum(x[1] - x[0], 1e-12),
-    )
-    right_rate = jnp.maximum(
-        (jnp.log(jnp.maximum(y[last - 1], floor)) - jnp.log(jnp.maximum(y[last], floor))) / jnp.maximum(x[last] - x[last - 1], 1e-12),
-        1.0 / jnp.maximum(x[last] - x[last - 1], 1e-12),
-    )
+    left_idx = jnp.minimum(jnp.arange(3), last)
+    right_idx = jnp.maximum(last - jnp.arange(2, -1, -1), 0)
+    def slope(sample):
+        xs, ys = x[sample], jnp.log(jnp.maximum(y[sample], floor))
+        centered = xs - jnp.mean(xs)
+        return jnp.sum(centered * (ys - jnp.mean(ys))) / jnp.maximum(jnp.sum(centered * centered), 1e-12)
+    left_step = jnp.maximum(jnp.median(jnp.diff(x[left_idx])), 1e-12)
+    right_step = jnp.maximum(jnp.median(jnp.diff(x[right_idx])), 1e-12)
+    left_rate = jnp.clip(slope(left_idx), 1.0 / (3.0 * left_step), 5.0 / left_step)
+    right_rate = jnp.clip(-slope(right_idx), 1.0 / (3.0 * right_step), 5.0 / right_step)
     tailed = jnp.where(
         below,
         y[0] * jnp.exp(-left_rate * (x[0] - value)),
