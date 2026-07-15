@@ -229,3 +229,29 @@ def test_jax_histogram_bilinear_murel_is_finite_and_differentiable(histogram_den
 
     assert jnp.isfinite(value)
     assert jnp.all(jnp.isfinite(grad))
+
+
+def test_histogram_tails_are_positive_normalised_and_match_jax(histogram_density: HistogramDensity) -> None:
+    pytest.importorskip("jax")
+    tables = HistogramTables.from_paths(FIXTURE / "mass.dat", FIXTURE / "rho.dat", FIXTURE / "murel.dat")
+    distance = histogram_density.distance.distance_pc
+    mass = histogram_density.mass.log_mass
+
+    for value in (10.0 ** (mass[0] - 0.1), 10.0 ** (mass[-1] + 0.1)):
+        numpy_value = tables.mass.density_given_component(value).sum()
+        jax_value = histogram_density.mass.density_given_component(value).sum()
+        assert numpy_value > 0.0
+        assert float(jax_value) == pytest.approx(numpy_value, rel=3e-4)
+    for value in ((distance[0] - 1.0) / 1000.0, (distance[-1] + 100.0) / 1000.0):
+        assert float(histogram_density.distance.source_pdf(value)) > 0.0
+
+    grid = np.linspace(0.0, distance[-1] / 1000.0 + 50.0, 20_001)
+    integrate = getattr(np, "trapezoid", np.trapz)
+    assert integrate([float(histogram_density.distance.source_pdf(value)) for value in grid], grid) == pytest.approx(1.0, rel=2e-3)
+
+
+def test_histogram_physical_boundaries_remain_zero(histogram_density: HistogramDensity) -> None:
+    assert float(histogram_density.density_mu_phi(0.0, 0.2, 0.6, 1.0, 0.0)) == 0.0
+    assert float(histogram_density.density_mu_phi(0.3, 0.0, 0.6, 1.0, 0.0)) == 0.0
+    assert float(histogram_density.density_mu_phi(0.3, 0.6, 0.6, 1.0, 0.0)) == 0.0
+    assert float(histogram_density.density_mu_phi(0.3, 0.2, 0.6, 0.0, 0.0)) == 0.0

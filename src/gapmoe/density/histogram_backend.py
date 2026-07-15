@@ -34,7 +34,7 @@ class MassHistogram:
         log_mass = jnp.log10(mass)
         values = jnp.array(
             [
-                jnp.interp(log_mass, self.log_mass, self.pdf_mass_by_component[:, i], left=0.0, right=0.0)
+                _interp_mass_tail(log_mass, self.log_mass, self.pdf_mass_by_component[:, i])
                 for i in range(self.pdf_mass_by_component.shape[1])
             ]
         )
@@ -67,13 +67,13 @@ class DistanceDensityTable:
         )
 
     def source_pdf(self, ds_kpc: float) -> jnp.ndarray:
-        val = jnp.interp(ds_kpc * 1000.0, self.distance_pc, self.source_density, left=0.0, right=0.0)
-        return jnp.where(self.source_norm > 0.0, val / self.source_norm, 0.0)
+        val = _interp_positive_tail(ds_kpc * 1000.0, self.distance_pc, self.source_density, lower=0.0)
+        return jnp.where((ds_kpc > 0.0) & (self.source_norm > 0.0), 1000.0 * val / self.source_norm, 0.0)
 
     def lens_pdf_given_source(self, dl_kpc: float, ds_kpc: float) -> jnp.ndarray:
         norm = self._lens_integral_until(ds_kpc)
-        val = jnp.interp(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, left=0.0, right=0.0)
-        return jnp.where((ds_kpc > dl_kpc) & (norm > 0.0), val / norm, 0.0)
+        val = _interp_positive_tail(dl_kpc * 1000.0, self.distance_pc, self.lens_density_total, lower=0.0)
+        return jnp.where((dl_kpc > 0.0) & (ds_kpc > dl_kpc) & (norm > 0.0), 1000.0 * val / norm, 0.0)
 
     def _lens_integral_until(self, ds_kpc: float) -> jnp.ndarray:
         ds_pc = ds_kpc * 1000.0
@@ -83,28 +83,31 @@ class DistanceDensityTable:
 
         x0 = self.distance_pc[idx]
         y0 = self.lens_density_total[idx]
-        y1 = jnp.interp(ds_pc, self.distance_pc, self.lens_density_total, left=0.0, right=0.0)
+        y1 = _interp_positive_tail(ds_pc, self.distance_pc, self.lens_density_total, lower=0.0)
         partial = 0.5 * (y0 + y1) * (ds_pc - x0)
         value = self.lens_cumulative_integral[idx] + partial
-        value = jnp.where(ds_pc <= self.distance_pc[0], 0.0, value)
-        value = jnp.where(ds_pc >= self.distance_pc[-1], self.lens_cumulative_integral[-1], value)
+        left_rate, right_rate = _tail_rates(self.distance_pc, self.lens_density_total)
+        lower_total = self.lens_density_total[0] / left_rate * (1.0 - jnp.exp(-left_rate * self.distance_pc[0]))
+        tail = self.lens_density_total[-1] / right_rate * (1.0 - jnp.exp(-right_rate * (ds_pc - self.distance_pc[-1])))
+        value = jnp.where(ds_pc <= 0.0, 0.0, lower_total + value)
+        value = jnp.where(ds_pc < self.distance_pc[0], lower_total - self.lens_density_total[0] / left_rate * jnp.exp(-left_rate * (self.distance_pc[0] - ds_pc)), value)
+        return jnp.where(ds_pc >= self.distance_pc[-1], lower_total + self.lens_cumulative_integral[-1] + tail, value)
         return value
 
     def component_fractions(self, dl_kpc: float) -> jnp.ndarray:
         vals = jnp.array(
             [
-                jnp.interp(
+                _interp_positive_tail(
                     dl_kpc * 1000.0,
                     self.distance_pc,
                     self.lens_density_by_component[:, i],
-                    left=0.0,
-                    right=0.0,
+                    lower=0.0,
                 )
                 for i in range(self.lens_density_by_component.shape[1])
             ]
         )
         total = jnp.sum(vals)
-        return jnp.where(total > 0.0, vals / total, jnp.zeros_like(vals))
+        return jnp.where((dl_kpc > 0.0) & (total > 0.0), vals / total, jnp.zeros_like(vals))
 
     def source_group_weights(self, ds_kpc: float) -> jnp.ndarray:
         values = self.source_component_values(ds_kpc)
@@ -595,7 +598,7 @@ class HistogramDensity:
         p_mass = self.mass_density_given_dl(ML, DL)
         p_dl = self.distance.lens_pdf_given_source(DL, DS)
         p_mu, p_phi = self.murel.densities(DL, DS, mu, phi, group_weights)
-        value = p_mass * p_dl * source_density * p_mu * p_phi / mu
+        value = 1000.0 * p_mass * p_dl * source_density * p_mu * p_phi / mu
         valid = (mu > 0.0) & (DS > DL) & (self.distance.source_norm > 0.0)
         return jnp.where(valid, value, 0.0)
 
@@ -883,7 +886,21 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     interpolated = y0 + (y1 - y0) * (value - x0) / denom
     exact_value = y[exact_idx]
     interpolated = jnp.where(exact, exact_value, interpolated)
-    return jnp.where((valid_len > 0) & ~(below | above), interpolated, 0.0)
+    floor = jnp.finfo(y.dtype).tiny
+    left_rate = jnp.maximum(
+        (jnp.log(jnp.maximum(y[1], floor)) - jnp.log(jnp.maximum(y[0], floor))) / jnp.maximum(x[1] - x[0], 1e-12),
+        1.0 / jnp.maximum(x[1] - x[0], 1e-12),
+    )
+    right_rate = jnp.maximum(
+        (jnp.log(jnp.maximum(y[last - 1], floor)) - jnp.log(jnp.maximum(y[last], floor))) / jnp.maximum(x[last] - x[last - 1], 1e-12),
+        1.0 / jnp.maximum(x[last] - x[last - 1], 1e-12),
+    )
+    tailed = jnp.where(
+        below,
+        y[0] * jnp.exp(-left_rate * (x[0] - value)),
+        jnp.where(above, y[last] * jnp.exp(-right_rate * (value - x[last]),), interpolated),
+    )
+    return jnp.where(valid_len > 0, tailed, 0.0)
 
 
 def _interp_padded_group(
@@ -895,6 +912,33 @@ def _interp_padded_group(
 ) -> jnp.ndarray:
     values = vmap(lambda column: _interp_padded(value, x, column, valid_len), in_axes=1)(y)
     return jnp.sum(values * weights)
+
+
+def _tail_rates(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    floor = jnp.finfo(y.dtype).tiny
+    left_step, right_step = jnp.maximum(x[1] - x[0], 1e-12), jnp.maximum(x[-1] - x[-2], 1e-12)
+    left = jnp.maximum((jnp.log(jnp.maximum(y[1], floor)) - jnp.log(jnp.maximum(y[0], floor))) / left_step, 1.0 / left_step)
+    right = jnp.maximum((jnp.log(jnp.maximum(y[-2], floor)) - jnp.log(jnp.maximum(y[-1], floor))) / right_step, 1.0 / right_step)
+    return left, right
+
+
+def _interp_positive_tail(value: float, x: jnp.ndarray, y: jnp.ndarray, *, lower: float | None = None) -> jnp.ndarray:
+    left_rate, right_rate = _tail_rates(x, y)
+    result = jnp.where(value < x[0], y[0] * jnp.exp(-left_rate * (x[0] - value)), jnp.where(value > x[-1], y[-1] * jnp.exp(-right_rate * (value - x[-1])), jnp.interp(value, x, y)))
+    return jnp.where(value > lower, result, 0.0) if lower is not None else result
+
+
+def _interp_mass_tail(value: float, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+    support = y > 0.0
+    first, last = jnp.argmax(support), y.shape[0] - 1 - jnp.argmax(support[::-1])
+    x0, xn, y0, yn = x[first], x[last], y[first], y[last]
+    li, ri = jnp.minimum(first + 1, last), jnp.maximum(last - 1, first)
+    floor = jnp.finfo(y.dtype).tiny
+    left_rate = jnp.maximum((jnp.log(jnp.maximum(y[li], floor)) - jnp.log(jnp.maximum(y0, floor))) / jnp.maximum(x[li] - x0, 1e-12), 1.0 / jnp.maximum(x[li] - x0, 1e-12))
+    right_rate = jnp.maximum((jnp.log(jnp.maximum(y[ri], floor)) - jnp.log(jnp.maximum(yn, floor))) / jnp.maximum(xn - x[ri], 1e-12), 1.0 / jnp.maximum(xn - x[ri], 1e-12))
+    right_rate = jnp.maximum(right_rate, jnp.log(10.0) + 1e-12)
+    result = jnp.where(value < x0, y0 * jnp.exp(-left_rate * (x0 - value)), jnp.where(value > xn, yn * jnp.exp(-right_rate * (value - xn)), jnp.interp(value, x, y)))
+    return jnp.where(jnp.any(support), result, 0.0)
 
 
 def _wrap_phi(phi: float) -> jnp.ndarray:
