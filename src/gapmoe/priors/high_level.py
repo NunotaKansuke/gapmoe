@@ -279,7 +279,6 @@ class GalaxyModel:
         integration_samples: int = 512,
         direction_samples: int = 32,
         seed: int = 0,
-        source_radius: bool = False,
     ):
         """Return this physical density expressed in light-curve parameters."""
 
@@ -291,7 +290,6 @@ class GalaxyModel:
             integration_samples=integration_samples,
             direction_samples=direction_samples,
             seed=seed,
-            source_radius=source_radius,
         )
 
     def log_source_density(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
@@ -334,6 +332,27 @@ class GalaxyModel:
             reference_magnitude,
             color,
             theta_star_mas,
+            context=context,
+        )
+
+    def _theta_star_proposal(
+        self,
+        *,
+        magnitudes: Mapping[str, Any],
+        context: Context = None,
+    ):
+        """Return a DS-marginalized proposal for ``log(thetaS/mas)``."""
+
+        if self.isochrone.table.log_radius_moment_by_component is None:
+            raise RuntimeError(
+                "isochrone table has no radius moments; rebuild it with the current gapmoe version"
+            )
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(
+            magnitudes
+        )
+        return self._conditional_prior.source_prior._theta_star_proposal(
+            reference_magnitude,
+            color,
             context=context,
         )
 

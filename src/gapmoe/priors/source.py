@@ -24,6 +24,13 @@ class SourceRadiusEstimate(NamedTuple):
     sigma_log_rsun: Any
 
 
+class ThetaStarProposal(NamedTuple):
+    """Moment-matched proposal for ``log(thetaS/mas)``."""
+
+    log_center: Any
+    log_sigma: Any
+
+
 @dataclass(frozen=True)
 class SourceCmdPrior:
     """Source CMD population model, separate from the five-dimensional event prior."""
@@ -146,6 +153,52 @@ class SourceCmdPrior:
             0.0,
         )
         return jnp.where(value > 0.0, jnp.log(value), -jnp.inf)
+
+    def _theta_star_proposal(
+        self,
+        reference_magnitude: Any,
+        color: Any,
+        *,
+        context: Context = None,
+    ) -> ThetaStarProposal:
+        """Moment-match ``p(log thetaS | apparent CMD)`` over source distance."""
+
+        distances = self.density.distance.distance_pc / 1000.0
+        widths = jnp.empty_like(distances)
+        widths = widths.at[0].set(0.5 * (distances[1] - distances[0]))
+        widths = widths.at[-1].set(0.5 * (distances[-1] - distances[-2]))
+        widths = widths.at[1:-1].set(0.5 * (distances[2:] - distances[:-2]))
+
+        def moments_at_distance(ds_kpc):
+            offsets = self.offset_calculator(ds_kpc, context)
+            density = self.cmd_prior.density_all_components(
+                reference_magnitude, color, offsets
+            )
+            first, second = self.cmd_prior.log_radius_moments_all_components(
+                reference_magnitude, color, offsets
+            )
+            components = self.density.distance.source_component_values(ds_kpc)
+            shift = jnp.log(4.650467260962157) - jnp.log(ds_kpc * 1000.0)
+            zeroth = jnp.sum(components * density)
+            first_theta = jnp.sum(components * (first + density * shift))
+            second_theta = jnp.sum(
+                components
+                * (second + 2.0 * shift * first + density * shift**2)
+            )
+            return zeroth, first_theta, second_theta
+
+        zeroth, first, second = vmap(moments_at_distance)(distances)
+        normalisation = jnp.sum(widths * zeroth)
+        mean = jnp.sum(widths * first) / normalisation
+        variance = jnp.maximum(jnp.sum(widths * second) / normalisation - mean**2, 0.0)
+        # This is only an importance proposal. A modest floor/inflation keeps
+        # support broad when one CMD bin dominates.
+        sigma = jnp.maximum(1.25 * jnp.sqrt(variance), 0.25)
+        valid = (normalisation > 0.0) & jnp.isfinite(mean) & jnp.isfinite(sigma)
+        return ThetaStarProposal(
+            log_center=jnp.where(valid, mean, jnp.nan),
+            log_sigma=jnp.where(valid, sigma, jnp.nan),
+        )
 
     def marginal_density(self, reference_magnitude: Any, color: Any, *, context: Context = None):
         """Return the marginal source-CMD prior p(CMD | l,b)."""

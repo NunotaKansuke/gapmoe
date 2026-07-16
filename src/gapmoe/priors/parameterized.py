@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import logsumexp
+from jax.scipy.special import logsumexp, ndtri
 import numpy as np
 
 from .event_rate_backend import log_event_rate_backend, log_flow_kernel_rate_backend
@@ -25,6 +25,8 @@ class _ImportanceProposal:
     x: Any
     phi: Any
     log_q: Any
+    log_q_ds: Any
+    theta_u: Any
 
 
 @dataclass(frozen=True)
@@ -36,7 +38,6 @@ class _PhysicalDensityView:
     physical_priors: tuple[Any, ...] = ()
     proposal: _ImportanceProposal | None = None
     direction_phi: Any = None
-    source_radius: bool = False
 
     @property
     def _prior(self):
@@ -49,17 +50,9 @@ class _PhysicalDensityView:
     def log_density(self, ml, dl, ds, mu_n, mu_e):
         physical = (ml, dl, ds, mu_n, mu_e)
         if self.joint:
-            theta_star_mas = None
-            if self.source_radius:
-                if self.context is None or "thS" not in self.context:
-                    raise ValueError(
-                        "source_radius=True requires context['thS'] in mas"
-                    )
-                theta_star_mas = self.context["thS"]
             value = self.galaxy.log_joint_density(
                 physical,
                 magnitudes=self.magnitudes,
-                theta_star_mas=theta_star_mas,
                 context=self.context,
             )
         else:
@@ -169,7 +162,6 @@ class ParameterizedGalaxyModel:
     integration_samples: int = 512
     direction_samples: int = 32
     seed: int = 0
-    source_radius: bool = False
     _physical_priors: list[Any] = field(default_factory=list, init=False, repr=False)
     _proposal: _ImportanceProposal | None = field(default=None, init=False, repr=False)
     _compiled: dict[Any, Any] = field(default_factory=dict, init=False, repr=False)
@@ -186,16 +178,6 @@ class ParameterizedGalaxyModel:
                 raise ValueError(f"{name} must be a positive integer")
         if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
-        if not isinstance(self.source_radius, bool):
-            raise TypeError("source_radius must be bool")
-        table = self.galaxy.isochrone.table
-        if self.source_radius and (
-            table.log_radius_moment_by_component is None
-            or table.log_radius_square_moment_by_component is None
-        ):
-            raise ValueError(
-                "source_radius=True requires an isochrone table with radius moments"
-            )
         if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
             self._importance_proposal()
 
@@ -251,7 +233,6 @@ class ParameterizedGalaxyModel:
             tuple(self._physical_priors),
             proposal,
             direction_phi,
-            self.source_radius,
         )
 
     def _importance_proposal(self):
@@ -278,11 +259,6 @@ class ParameterizedGalaxyModel:
         )
 
     def log_density(self, theta, *, context=None, magnitudes=None):
-        if self.source_radius:
-            raise ValueError(
-                "source_radius=True represents a joint thetaS/photometry density; "
-                "use log_joint_density(..., magnitudes=...)"
-            )
         self._prepare_integration(magnitudes)
         evaluator = self._compiled_evaluator(
             joint=False,
@@ -404,6 +380,194 @@ class ParameterizedGalaxyModel:
             rng=rng,
         )
 
+    def _isochrone_joint_terms(self, theta, *, magnitudes, context=None):
+        """Return paired-QMC log terms and physical candidates.
+
+        ``magnitudes`` is a pytree whose leaves have leading dimension
+        ``integration_samples``. thetaS and every hidden physical dimension
+        use the same QMC row, avoiding a Cartesian thetaS-by-distance grid.
+        """
+
+        self._importance_proposal()
+        key = (
+            "isochrone_joint",
+            context is not None,
+            tuple(sorted(magnitudes)),
+        )
+        if key not in self._compiled:
+            if context is None:
+                fn = lambda theta, magnitudes: self._isochrone_joint_terms_impl(
+                    theta, magnitudes, None
+                )
+            else:
+                fn = lambda theta, context, magnitudes: self._isochrone_joint_terms_impl(
+                    theta, magnitudes, context
+                )
+            self._compiled[key] = jax.jit(fn)
+        args = [jnp.asarray(theta)]
+        if context is not None:
+            args.append(context)
+        args.append(magnitudes)
+        return self._compiled[key](*args)
+
+    def _isochrone_joint_terms_impl(self, theta, magnitudes, context):
+        proposal = self._importance_proposal()
+        first_magnitude = next(iter(magnitudes.values()))
+        if jnp.ndim(first_magnitude) == 0:
+            one_proposal = self.galaxy._theta_star_proposal(
+                magnitudes=magnitudes,
+                context=context,
+            )
+            theta_proposal = type(one_proposal)(
+                log_center=jnp.full_like(proposal.theta_u, one_proposal.log_center),
+                log_sigma=jnp.full_like(proposal.theta_u, one_proposal.log_sigma),
+            )
+            magnitudes = {
+                key: jnp.full_like(proposal.theta_u, value)
+                for key, value in magnitudes.items()
+            }
+        else:
+            theta_proposal = jax.vmap(
+                lambda current: self.galaxy._theta_star_proposal(
+                    magnitudes=current,
+                    context=context,
+                )
+            )(magnitudes)
+        log_sigma = theta_proposal.log_sigma
+        z = ndtri(jnp.clip(proposal.theta_u, 1.0e-7, 1.0 - 1.0e-7))
+        log_theta_s = theta_proposal.log_center + log_sigma * z
+        theta_s = jnp.exp(log_theta_s)
+        log_q_theta = (
+            -0.5 * z**2
+            - jnp.log(log_sigma)
+            - 0.5 * jnp.log(2.0 * jnp.pi)
+        )
+
+        def current_context(value):
+            result = {} if context is None else dict(context)
+            result["thS"] = value
+            return result
+
+        def value_tuple(values):
+            if isinstance(values, tuple):
+                return values
+            return tuple(values[:, index] for index in range(values.shape[1]))
+
+        def joint_log_density(values, current_theta_s, current_magnitudes):
+            ml, dl, ds, mu_n, mu_e = values[:5]
+            current = current_context(current_theta_s)
+            value = self.galaxy.log_joint_density(
+                (ml, dl, ds, mu_n, mu_e),
+                magnitudes=current_magnitudes,
+                theta_star_mas=current_theta_s,
+                context=current,
+            )
+            return value + _physical_prior_sum(
+                tuple(self._physical_priors),
+                ML=ml,
+                DL=dl,
+                DS=ds,
+                mu_N=mu_n,
+                mu_E=mu_e,
+                mu=jnp.hypot(mu_n, mu_e),
+            )
+
+        uses_theta_mu = bool(
+            getattr(self.param_type, "uses_theta_mu_physical", False)
+        )
+        marginalizes_distance = bool(
+            getattr(self.param_type, "marginalizes_distance", False)
+        )
+        uses_mu = bool(getattr(self.param_type, "uses_mu_physical", False))
+
+        if uses_theta_mu:
+            transformed = jax.vmap(
+                lambda current_theta_s: self.param_type.to_theta_mu_physical(
+                    theta, current_context(current_theta_s)
+                )
+            )(theta_s)
+            theta_e, mu = transformed
+            reduced_jacobian = jax.vmap(
+                lambda current_theta_s: self.param_type.log_abs_det_jacobian(
+                    theta, current_context(current_theta_s)
+                )
+            )(theta_s)
+            ds = proposal.ds
+            dl = proposal.x * ds
+            pi_rel = 1.0 / dl - 1.0 / ds
+            ml = theta_e**2 / (_KAPPA * pi_rel)
+            mu_n = mu * jnp.cos(proposal.phi)
+            mu_e = mu * jnp.sin(proposal.phi)
+            values = (ml, dl, ds, mu_n, mu_e)
+            physical_jacobian = (
+                jnp.log(2.0 * jnp.abs(theta_e) / (_KAPPA * pi_rel))
+                + jnp.log(ds)
+                + jnp.log(jnp.abs(mu))
+            )
+            log_q_physical = proposal.log_q
+        elif marginalizes_distance:
+            full_impl = self.param_type.distance_impl
+
+            def transform(current_theta_s, ds):
+                current = current_context(current_theta_s)
+                full_theta = self.param_type.with_distance(theta, ds)
+                return (
+                    full_impl.to_physical(full_theta, current),
+                    full_impl.log_abs_det_jacobian(full_theta, current),
+                )
+
+            values, reduced_jacobian = jax.vmap(transform)(theta_s, proposal.ds)
+            values = value_tuple(values)
+            physical_jacobian = 0.0
+            log_q_physical = proposal.log_q_ds
+        elif uses_mu:
+            transformed = jax.vmap(
+                lambda current_theta_s: self.param_type.to_mu_physical(
+                    theta, current_context(current_theta_s)
+                )
+            )(theta_s)
+            ml, dl, ds, mu = transformed
+            reduced_jacobian = jax.vmap(
+                lambda current_theta_s: self.param_type.log_abs_det_jacobian(
+                    theta, current_context(current_theta_s)
+                )
+            )(theta_s)
+            mu_n = mu * jnp.cos(proposal.phi)
+            mu_e = mu * jnp.sin(proposal.phi)
+            values = (ml, dl, ds, mu_n, mu_e)
+            physical_jacobian = jnp.log(jnp.abs(mu)) + jnp.log(2.0 * jnp.pi)
+            log_q_physical = jnp.zeros_like(theta_s)
+        else:
+            def transform(current_theta_s):
+                current = current_context(current_theta_s)
+                return (
+                    self.param_type.to_physical(theta, current),
+                    self.param_type.log_abs_det_jacobian(theta, current),
+                )
+
+            values, reduced_jacobian = jax.vmap(transform)(theta_s)
+            values = value_tuple(values)
+            physical_jacobian = 0.0
+            log_q_physical = jnp.zeros_like(theta_s)
+
+        logp = jax.vmap(joint_log_density)(
+            jnp.stack(values[:5], axis=1), theta_s, magnitudes
+        )
+        terms = (
+            logp
+            + reduced_jacobian
+            + physical_jacobian
+            - log_q_physical
+            - log_q_theta
+        )
+        valid = jnp.isfinite(terms)
+        terms = jnp.where(valid, terms, -jnp.inf)
+        keys = ["ML", "DL", "DS", "mu_N", "mu_E"]
+        keys.extend(getattr(self.param_type, "derived_names", ()))
+        physical = {key: value for key, value in zip(keys, values)}
+        physical["thetaS"] = theta_s
+        return {"log_terms": terms, "physical": physical}
+
     def _sample_qmc_physical(self, theta, view, *, context, rng, theta_mu):
         rng = np.random.default_rng() if rng is None else rng
         array = np.asarray(theta)
@@ -462,7 +626,7 @@ def _build_importance_proposal(galaxy, samples, seed):
     cdf = np.concatenate(([0.0], np.cumsum(segment_mass)))
     cdf /= cdf[-1]
 
-    points = _halton_points(samples, 4, seed)
+    points = _halton_points(samples, 5, seed)
     ds = np.interp(points[:, 0], cdf, distance)
     q_ds = np.interp(ds, distance, source_density)
 
@@ -485,6 +649,8 @@ def _build_importance_proposal(galaxy, samples, seed):
         x=jnp.asarray(np.clip(x, 1.0e-6, 1.0 - 1.0e-6)),
         phi=jnp.asarray(phi),
         log_q=jnp.asarray(log_q),
+        log_q_ds=jnp.asarray(np.log(q_ds)),
+        theta_u=jnp.asarray(points[:, 4]),
     )
 
 

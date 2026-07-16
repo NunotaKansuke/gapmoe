@@ -178,7 +178,6 @@ def test_no_parallax_flow_jointly_integrates_isochrone_source_radius():
         ParamType(parallax=False),
         integration_samples=64,
         seed=2,
-        source_radius=True,
     )
     theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
     magnitudes = {"Imag": 18.0, "Vmag": 20.0}
@@ -209,25 +208,71 @@ def test_no_parallax_flow_jointly_integrates_isochrone_source_radius():
         )
     )(jax.numpy.asarray(log_theta_grid))
 
-    matched = prior.log_joint_density(
+    proposal = galaxy._theta_star_proposal(magnitudes=magnitudes)
+    joint = prior._isochrone_joint_terms(
         theta,
-        context={"thS": 0.005},
-        magnitudes=magnitudes,
-    )
-    mismatched = prior.log_joint_density(
-        theta,
-        context={"thS": 0.05},
-        magnitudes=magnitudes,
+        magnitudes={
+            band: np.full(prior.integration_samples, value)
+            for band, value in magnitudes.items()
+        },
     )
 
-    assert np.isfinite(matched)
-    assert matched > mismatched
+    assert proposal.log_center == pytest.approx(log_theta_center, abs=0.1)
+    assert proposal.log_sigma >= 0.3
+    assert np.isfinite(np.asarray(joint["log_terms"])).any()
+    assert np.asarray(joint["physical"]["thetaS"]).shape == (64,)
     assert direct_matched > direct_mismatched
     assert np.trapezoid(np.asarray(theta_density), log_theta_grid) == pytest.approx(
         1.0, rel=1.0e-4
     )
-    with pytest.raises(ValueError, match="use log_joint_density"):
-        prior.log_density(theta, context={"thS": 0.005})
+
+
+@pytest.mark.parametrize(
+    "param_type,theta,context,expected",
+    [
+        (
+            ParamType(parallax=True, distance="marginalize"),
+            np.asarray((8000.0, 50.0, 0.1, 0.005, 0.1, 0.05)),
+            {"vEarth": (0.0, 0.0)},
+            {"ML", "DL", "DS", "mu_N", "mu_E", "thetaS"},
+        ),
+        (
+            ParamType(parallax=False, distance="sample"),
+            np.asarray((8000.0, 50.0, 0.1, 0.005, 4.0, 8.0)),
+            None,
+            {"ML", "DL", "DS", "mu_N", "mu_E", "thetaS"},
+        ),
+        (
+            ParamType(parallax=True, orbital_motion="kepler"),
+            np.asarray((
+                8000.0, 50.0, 0.1, 0.005, 0.1, 1.0, 0.5,
+                0.1, 0.05, -0.0001, -0.0001, -0.01, 0.1, 1.1,
+            )),
+            {"vEarth": (0.0, 0.0)},
+            {"ML", "DL", "DS", "mu_N", "mu_E", "thetaS", "e", "cos_i"},
+        ),
+    ],
+)
+def test_isochrone_joint_terms_cover_parameterization_modes(
+    param_type, theta, context, expected
+):
+    galaxy = Model().set(
+        l=0.25,
+        b=-3.75,
+        extinction={"Imag": 1.2, "Vmag": 2.0},
+    ).set_flow(release="rate-included-v1").galactic_model(
+        _isochrone(source_radius=True)
+    )
+    prior = galaxy.parameterize(param_type, integration_samples=16, seed=7)
+    result = prior._isochrone_joint_terms(
+        theta,
+        magnitudes={"Imag": 18.0, "Vmag": 20.0},
+        context=context,
+    )
+
+    assert np.isfinite(np.asarray(result["log_terms"])).any()
+    assert expected <= set(result["physical"])
+    assert all(np.asarray(value).shape == (16,) for value in result["physical"].values())
 
 
 def test_no_parallax_importance_integral_applies_hidden_physical_prior():
