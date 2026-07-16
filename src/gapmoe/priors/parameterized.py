@@ -166,7 +166,7 @@ class ParameterizedGalaxyModel:
 
     galaxy: Any
     param_type: Any
-    integration_samples: int = 256
+    integration_samples: int = 512
     direction_samples: int = 32
     seed: int = 0
     source_radius: bool = False
