@@ -163,63 +163,6 @@ class SourceSelection:
 
 
 @dataclass(frozen=True)
-class MagnitudeMeasurement:
-    band: str
-    value: float
-    error: float
-    apparent: bool = True
-
-    def log_likelihood(self, source: SourceObservables) -> np.ndarray:
-        if self.error <= 0.0:
-            raise ValueError("magnitude measurement error must be positive")
-        residual = (source.magnitude(self.band, apparent=self.apparent) - self.value) / self.error
-        return -0.5 * residual * residual - np.log(self.error * np.sqrt(2.0 * np.pi))
-
-
-@dataclass(frozen=True)
-class ColorMeasurement:
-    blue_band: str
-    red_band: str
-    value: float
-    error: float
-    apparent: bool = True
-
-    def log_likelihood(self, source: SourceObservables) -> np.ndarray:
-        if self.error <= 0.0:
-            raise ValueError("color measurement error must be positive")
-        color = source.magnitude(self.blue_band, apparent=self.apparent) - source.magnitude(
-            self.red_band, apparent=self.apparent
-        )
-        residual = (color - self.value) / self.error
-        return -0.5 * residual * residual - np.log(self.error * np.sqrt(2.0 * np.pi))
-
-
-@dataclass(frozen=True)
-class SourcePhotometry:
-    """Observed photometry likelihood, optionally restricted by survey cuts.
-
-    Angular source-radius inference belongs to the separate isochrone source
-    model. Keeping it out of this evidence factor prevents double-counting a
-    theta-star estimate derived from the same colour and magnitude data.
-    """
-
-    magnitudes: tuple[MagnitudeMeasurement, ...] = ()
-    colors: tuple[ColorMeasurement, ...] = ()
-    selection: SourceSelection | None = None
-
-    def log_weight(self, source: SourceObservables) -> np.ndarray:
-        first = next(iter(source.absolute_magnitudes.values()), source.radius_rsun)
-        log_weight = np.zeros(np.asarray(first).shape, dtype=float)
-        if self.selection is not None:
-            log_weight = log_weight + self.selection.log_weight(source)
-        for measurement in self.magnitudes:
-            log_weight = log_weight + measurement.log_likelihood(source)
-        for measurement in self.colors:
-            log_weight = log_weight + measurement.log_likelihood(source)
-        return log_weight
-
-
-@dataclass(frozen=True)
 class ExponentialDustOffsets:
     """Distance modulus plus an exponential extinction screen.
 
@@ -422,13 +365,6 @@ def _uses_apparent_photometry(source_data: SourceDataModel) -> bool:
         return any(
             isinstance(cut, (MagnitudeCut, ColorCut)) and cut.apparent
             for cut in source_data.cuts
-        )
-    if isinstance(source_data, SourcePhotometry):
-        selection_uses_apparent = (
-            source_data.selection is not None and _uses_apparent_photometry(source_data.selection)
-        )
-        return selection_uses_apparent or any(item.apparent for item in source_data.magnitudes) or any(
-            item.apparent for item in source_data.colors
         )
     return False
 

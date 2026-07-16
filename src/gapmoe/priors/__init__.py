@@ -1,12 +1,10 @@
-from .high_level import GalaxyModel, IsochroneModel, Model
-from .parameterized import ParameterizedGalaxyModel
+from .high_level import GalaxyModel, IsochroneModel, Workspace
 from .source import EventPrior5D, SourceCmdPrior
 
 __all__ = [
     "GalaxyModel",
     "IsochroneModel",
-    "Model",
-    "ParameterizedGalaxyModel",
+    "Workspace",
     "EventPrior5D",
     "SourceCmdPrior",
 ]

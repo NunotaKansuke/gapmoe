@@ -21,8 +21,8 @@ _KAPPA = 8.1429  # mas / Msun
 class ParamType:
     """Standard gapmoe light-curve-to-physical param_type selector.
 
-    ``ParamType`` is itself a parameterization object and can be passed
-    directly to ``GalaxyModel.parameterize()``. The selected concrete mapping stays internal
+    ``ParamType`` is itself a parameterization object and is passed directly
+    to ``gapmoe.Model``. The selected concrete mapping stays internal
     so users do not need to choose class names for parallax/static/orbital cases.
 
     Examples
@@ -433,7 +433,7 @@ class _StaticParallaxMarginalDistanceParamType:
     ):
         raise TypeError(
             "This param_type marginalizes source distance; evaluate it "
-            "through a parameterized GalaxyModel.log_density()."
+            "through gapmoe.Model.log_density()."
         )
 
     def log_abs_det_jacobian(
@@ -443,7 +443,7 @@ class _StaticParallaxMarginalDistanceParamType:
     ):
         raise TypeError(
             "This param_type marginalizes source distance; the full "
-            "Jacobian is integrated inside a parameterized GalaxyModel.log_density()."
+            "Jacobian is integrated inside gapmoe.Model.log_density()."
         )
 
 
