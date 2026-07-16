@@ -1,0 +1,72 @@
+{
+  "config": {
+    "dim": 4,
+    "cond_dim": 8,
+    "flow_layers": 16,
+    "nn_width": 256,
+    "nn_depth": 3,
+    "seed": 0
+  },
+  "transform": {
+    "mean": [
+      -1.3636856965811275,
+      1.2668796934544198,
+      0.9645192363776405,
+      2.1265314069372097
+    ],
+    "std": [
+      1.0843889202933716,
+      1.2778735009167075,
+      8.551845894514528,
+      9.318577988729226
+    ]
+  },
+  "condition_transform": {
+    "mean": [
+      0.0,
+      -4.0,
+      8.909804230581162,
+      0.11448396825396825,
+      0.04348661375661376,
+      0.8373216402116402,
+      0.0,
+      0.004707777777777778
+    ],
+    "std": [
+      3.0276503540974917,
+      1.2909944487358056,
+      1.5637173991047162,
+      0.3183981615051362,
+      0.20394981776385582,
+      0.36907195916169755,
+      1.0,
+      0.06845154934637737
+    ],
+    "names": [
+      "l",
+      "b",
+      "DS",
+      "source_group_thin",
+      "source_group_thick",
+      "source_group_bulge",
+      "source_group_NSD",
+      "source_group_halo"
+    ]
+  },
+  "feature_names": [
+    "ML",
+    "DL",
+    "mu_E",
+    "mu_N"
+  ],
+  "condition_names": [
+    "l",
+    "b",
+    "DS",
+    "source_group_thin",
+    "source_group_thick",
+    "source_group_bulge",
+    "source_group_NSD",
+    "source_group_halo"
+  ]
+}

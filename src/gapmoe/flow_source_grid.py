@@ -46,6 +46,11 @@ class FlowSourceDistanceGrid:
     column of total lens number density. This matches the measure left after
     removing ``thetaE * mu_rel`` from the released conditional kernel; that
     kernel retains the genulens lens-area factor ``DL**2``.
+
+    A rate-included release instead stores the direct component-resolved
+    ``wtj`` marginal in this same array. Its manifest marks the paired kernel
+    as rate-included, so neither density evaluation nor sampling applies an
+    additional event-rate factor.
     """
 
     l_deg: jnp.ndarray

@@ -19,6 +19,7 @@ class FlowPackageManifest:
     b_range_deg: tuple[float, float]
     remnant: int
     binary: int
+    event_rate_included: bool
     event_kernel: str
     source_distance_grid: str
     cmd_prior: str | None
@@ -37,6 +38,7 @@ class FlowPackageManifest:
             b_range_deg=tuple(float(value) for value in coverage["b"]),
             remnant=int(options["remnant"]),
             binary=int(options["binary"]),
+            event_rate_included=bool(payload.get("event_rate_included", False)),
             event_kernel=str(payload["event_kernel"]),
             source_distance_grid=str(payload["source_distance_grid"]),
             cmd_prior=str(payload["cmd_prior"]) if payload.get("cmd_prior") else None,

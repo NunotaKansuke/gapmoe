@@ -169,7 +169,7 @@ class EventPrior5D:
                 magnitude_offsets=offsets,
             )
             value = joint - self.source_prior.log_marginal_density(reference_magnitude, color, context=context)
-        if self.include_event_rate:
+        if self.include_event_rate and not getattr(self.density, "event_rate_included", False):
             rate = (
                 log_flow_kernel_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
                 if getattr(self.density, "event_rate_factor_includes_lens_area", False)

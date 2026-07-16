@@ -185,6 +185,7 @@ class GalaxyModel:
             distance=source_density.distance,
             l_deg=float(l_deg),
             b_deg=float(b_deg),
+            event_rate_included=package.manifest.event_rate_included,
         )
         return cls(
             density=density,
@@ -270,7 +271,9 @@ class GalaxyModel:
 
         The returned order is ``(ML, DL, DS, mu_N, mu_E)``. This method is
         available only for Flow-backed models and samples the base Galactic
-        kernel before applying the event-rate factor.
+        kernel. For a rate-included release this is already conditional on
+        the event-rate measure; for the default release it is the base kernel
+        before applying the remaining event-rate factor.
         """
 
         sampler = getattr(self.density, "sample_kernel", None)
@@ -292,6 +295,8 @@ class GalaxyModel:
         selection, or from the supplied apparent magnitudes.  With event-rate
         weighting enabled, a small importance-resampling population is used
         to draw from the same event-rate-weighted density as ``log_density``.
+        A rate-included release draws directly because both its source grid
+        and conditional kernel already use that measure.
         """
 
         if not isinstance(num_proposals, int) or num_proposals < 1:
@@ -307,7 +312,8 @@ class GalaxyModel:
         if source_sampler is None or kernel_sampler is None:
             raise TypeError("sample is available only for Flow-backed models")
 
-        n_candidates = num_proposals if self.include_event_rate else 1
+        rate_already_included = getattr(sampling_prior.density, "event_rate_included", False)
+        n_candidates = num_proposals if self.include_event_rate and not rate_already_included else 1
         source_key, kernel_key, choose_key = jax.random.split(jnp.asarray(key), 3)
         source_keys = jax.random.split(source_key, n_candidates)
         kernel_keys = jax.random.split(kernel_key, n_candidates)
@@ -315,7 +321,7 @@ class GalaxyModel:
             lambda sample_key: source_sampler(sample_key, component_weights)
         )(source_keys)
         candidates = jax.vmap(kernel_sampler)(kernel_keys, ds, source_group)
-        if not self.include_event_rate:
+        if not self.include_event_rate or rate_already_included:
             return candidates[0]
         log_weights = log_flow_kernel_rate_backend(
             candidates[:, 0],
@@ -548,6 +554,11 @@ class Model:
             self._flow_release.validate_model_options(
                 remnant=self._settings["remnant"], binary=self._settings["binary"]
             )
+            if self._flow_release.event_rate_included and not include_event_rate:
+                raise ValueError(
+                    f"flow release {self._flow_release.name!r} is trained on the event-rate measure; "
+                    "include_event_rate=False cannot remove that factor"
+                )
             if self._flow_package is None:
                 self._flow_package = FlowPackage.bundled(self._flow_release.name)
             return GalaxyModel.from_flow_package(

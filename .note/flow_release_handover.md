@@ -1,6 +1,6 @@
 # Flow Release Handover
 
-Date: 2026-07-14
+Date: 2026-07-16
 
 ## Shipped State
 
@@ -20,6 +20,12 @@ p(ML, DL, mu_N, mu_E | DS, source_group, l, b).
 `DS` and source-group weights remain in the source-distance/isochrone layer.
 This keeps CMD selection independent of Flow training. The default
 `GalaxyModel` adds the event-rate factor to `log_density`.
+
+The bundled `rate-included-v1` release covers the same sky and model options,
+but targets the complete genulens event measure. It is the release for
+high-precision population Monte Carlo and exponential tilting. Its kernel is
+trained directly from raw `wtj`, and its component-resolved source-distance
+grid is the matching `wtj` marginal. No rate factor is applied at inference.
 
 ## Public API
 
@@ -48,6 +54,14 @@ sample_given_photometry = prior.sample(
     key,
     magnitudes={"Imag": i_s, "Vmag": v_s},
 )
+```
+
+Select the population-MC release explicitly:
+
+```python
+model.set_flow(release="rate-included-v1")
+prior = model.galactic_model(isochrone)
+sample = prior.sample(key)  # direct event-measure draw
 ```
 
 The canonical parameter order is `(ML, DL, DS, mu_N, mu_E)`, with masses in
@@ -84,12 +98,19 @@ and needs the installed genulens Python API or a local checkout for the
 preprocessing step. `Model().resume(directory)` restores a prepared histogram
 run.
 
+For `rate-included-v1`, `include_event_rate=False` is invalid: the event-rate
+factor is part of both learned factors and cannot be removed after training.
+
 ## Packaged Artifacts
 
 - `src/gapmoe/data/flows/default/event_kernel/flow.eqx`
 - `src/gapmoe/data/flows/default/event_kernel/config.json`
 - `src/gapmoe/data/flows/default/source_distance_grid.npz`
 - `src/gapmoe/data/flows/default/manifest.json`
+- `src/gapmoe/data/flows/rate-included-v1/event_kernel/flow.eqx`
+- `src/gapmoe/data/flows/rate-included-v1/event_kernel/config.json`
+- `src/gapmoe/data/flows/rate-included-v1/source_distance_grid.npz`
+- `src/gapmoe/data/flows/rate-included-v1/manifest.json`
 
 `pyproject.toml` includes these files as package data. `Model` creates the
 genulens runner lazily when no `genulens_root` is explicitly supplied, so a
@@ -120,14 +141,52 @@ The raw validation products are intentionally outside git under:
 
 ```text
 flow_mvp/runs/release_v2_base_20260713_135000/independent_validation/
+flow_mvp/runs/rate_included_v1_galaxy_validation_20260716.json
+flow_mvp/runs/rate_included_v1_conditional_validation_20260716/
 ```
+
+### `rate-included-v1`
+
+The release is a source-group expert model, with no inference-time correction
+weights. Thin disk, thick disk, and bulge use the original raw-`wtj` kernel,
+whose training table actually covers all 189 grid points over `l=[-5,5]` and
+`b=[-6,-2]`. Earlier downstream notes describing it as `l=+-4` were incorrect.
+NSD and halo use the 15-million-sample balanced raw-`wtj` expert (three million
+per source group), because the original table contained no NSD examples. Both
+experts are normalized conditional densities; selecting one by source group
+preserves the joint event measure and is not importance reweighting.
+
+The matching source grid was regenerated from independent raw `wtj` tables
+with `NSD=1`, `SMALLGAMMA=1`, `REMNANT=0`, and `BINARY=0`. The complete
+source-grid × expert comparison on 270,000 independent genulens events at nine
+midpoint sightlines gives
+maximum KS values: DS 0.03310, ML 0.02204, DL 0.02047, mu_E 0.01687, and mu_N
+0.01834. Derived `DL/DS`, `mu_rel`, `theta_E`, and `t_E` have maximum KS
+0.02464; the maximum Spearman-correlation-matrix difference is 0.03025 and the
+largest source-group fraction difference is 0.01034.
+
+Conditional holdouts test the learned kernel separately from the source grid.
+For thin disk, thick disk, and bulge over nine held-out sightlines, the maxima
+are 0.04337 (marginal KS), 0.04070 (derived-observable KS), and 0.07121
+(rank-correlation difference). Independent forced-component holdouts give
+0.03730/0.03860/0.03297 for NSD and 0.03130/0.03790/0.05693 for halo. All are
+below the predeclared 0.05/0.05/0.10 limits. The complete package therefore
+passes directly as a Flow approximation to the genulens Galactic event model.
+
+N24 was useful downstream for exposing the earlier event-measure mismatch,
+but it is not a release dependency or the acceptance definition for gapmoe.
+The shipped evidence is the independent direct comparison above. The
+fresh `asinh(mu)` and globally balanced candidates remain reproducible rejected
+runs: neither improves the complete direct validation enough to replace the
+full-grid main kernel plus the more accurate rare-group expert.
 
 ## Verification Performed
 
-- `pytest -q`: 116 passed.
+- `pytest -q`: 129 passed.
 - A wheel was built and installed into an isolated target directory.
-- From that wheel, `Model().set(...).set_flow().galactic_model(...)` loaded
-  the artifact, evaluated a finite density, and produced a kernel sample.
+- From that wheel, both `rate-included-v1` experts loaded, the nested rare-group
+  artifact was present, and the public model evaluated a finite density and
+  produced a kernel sample.
 
 ## Follow-up Work
 

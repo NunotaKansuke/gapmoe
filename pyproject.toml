@@ -61,6 +61,10 @@ gapmoe = [
   "data/flows/default/*.json",
   "data/flows/default/*.npz",
   "data/flows/default/event_kernel/*",
+  "data/flows/rate-included-v1/*.json",
+  "data/flows/rate-included-v1/*.npz",
+  "data/flows/rate-included-v1/event_kernel/*",
+  "data/flows/rate-included-v1/event_kernel/rare_groups/*",
 ]
 
 [tool.pytest.ini_options]

@@ -4,6 +4,8 @@ import jax
 import numpy as np
 
 from gapmoe import Model
+from gapmoe.density import EventKernelFlow
+from gapmoe.flow_package import FlowPackage
 from gapmoe.priors.high_level import IsochroneModel
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
@@ -79,3 +81,42 @@ def test_bundled_flow_samples_the_full_source_aware_prior():
         assert sample[0] > 0.0
         assert 0.0 < sample[1] < sample[2]
         assert np.isfinite(sample).all()
+
+
+def test_bundled_rate_included_flow_runs_without_double_rate_weighting():
+    model = Model().set(l=0.25, b=-3.75).set_flow(release="rate-included-v1")
+    prior = model.galactic_model(_isochrone())
+    theta = np.asarray((0.3, 4.0, 8.0, 3.0, -2.0))
+
+    value = prior.log_density(theta)
+    sample = np.asarray(prior.sample(jax.random.key(4), num_proposals=1))
+
+    assert np.isfinite(value)
+    assert sample.shape == (5,)
+    assert np.isfinite(sample).all()
+
+
+def test_rate_included_flow_cannot_remove_rate_factor():
+    model = Model().set(l=0.25, b=-3.75).set_flow(release="rate-included-v1")
+
+    with np.testing.assert_raises_regex(ValueError, "cannot remove"):
+        model.galactic_model(_isochrone(), include_event_rate=False)
+
+
+def test_rate_included_flow_loads_source_group_experts():
+    package = FlowPackage.bundled("rate-included-v1")
+    kernel = EventKernelFlow.load(package.event_kernel_path)
+
+    assert set(kernel.group_overrides) == {3, 4}
+
+    key = jax.random.key(17)
+    for group in (2, 3, 4):
+        condition = np.concatenate(([0.25, -3.75, 8.0], np.eye(5)[group]))
+        expected_model = kernel.group_overrides.get(group, kernel)
+        expected = expected_model._sample_single(key, condition)
+        np.testing.assert_allclose(kernel.sample(key, condition), expected)
+        values = np.asarray((0.3, 4.0, 3.0, -2.0))
+        np.testing.assert_allclose(
+            kernel.log_density(values, condition),
+            expected_model._log_density_single(values, condition),
+        )

@@ -105,15 +105,40 @@ class EventKernelFlow:
         transform: ResidualTransform,
         condition_transform: StandardTransform,
         config: FlowConfig,
+        group_overrides: dict[int, "EventKernelFlow"] | None = None,
     ) -> None:
         self.flow = flow
         self.transform = transform
         self.condition_transform = condition_transform
         self.config = config
+        self.group_overrides = group_overrides or {}
 
     @classmethod
     def load(cls, directory: str | Path) -> "EventKernelFlow":
         directory = Path(directory)
+        model = cls._load_single(directory)
+        override_path = directory / "group_overrides.json"
+        if not override_path.exists():
+            return model
+        payload = json.loads(override_path.read_text())
+        loaded: dict[str, EventKernelFlow] = {}
+        overrides = {}
+        for group, relative_path in payload.items():
+            if relative_path not in loaded:
+                loaded[relative_path] = cls._load_single(directory / relative_path)
+            overrides[int(group)] = loaded[relative_path]
+        if any(group < 0 or group >= 5 for group in overrides):
+            raise ValueError("event-kernel group overrides must be in [0, 4]")
+        return cls(
+            model.flow,
+            model.transform,
+            model.condition_transform,
+            model.config,
+            group_overrides=overrides,
+        )
+
+    @classmethod
+    def _load_single(cls, directory: Path) -> "EventKernelFlow":
         metadata = json.loads((directory / "config.json").read_text())
         config = FlowConfig.from_json(metadata["config"])
         transform = ResidualTransform.from_json(metadata["transform"])
@@ -130,6 +155,18 @@ class EventKernelFlow:
         return cls(flow, transform, condition_transform, config)
 
     def log_density(self, values: Any, condition: Any):
+        logp = self._log_density_single(values, condition)
+        condition = jnp.asarray(condition)
+        for groups, model in self._unique_group_overrides():
+            override = model._log_density_single(values, condition)
+            selected = jnp.any(
+                jnp.stack([condition[..., 3 + group] > 0.5 for group in groups]),
+                axis=0,
+            )
+            logp = jnp.where(selected, override, logp)
+        return logp
+
+    def _log_density_single(self, values: Any, condition: Any):
         values = jnp.asarray(values)
         condition = jnp.asarray(condition)
         unconstrained = self.transform.to_unconstrained(values, condition)
@@ -146,12 +183,35 @@ class EventKernelFlow:
         return jnp.where(valid & jnp.isfinite(logp), logp, -jnp.inf)
 
     def sample(self, key: Any, condition: Any):
+        sample = self._sample_single(key, condition)
+        condition = jnp.asarray(condition)
+        for groups, model in self._unique_group_overrides():
+            override = model._sample_single(key, condition)
+            selected = jnp.any(
+                jnp.stack([condition[..., 3 + group] > 0.5 for group in groups]),
+                axis=0,
+            )
+            sample = jnp.where(selected[..., None], override, sample)
+        return sample
+
+    def _sample_single(self, key: Any, condition: Any):
         condition = jnp.asarray(condition)
         unconstrained = self.flow.sample(
             key,
             condition=self.condition_transform.apply(condition),
         )
         return self.transform.from_unconstrained(unconstrained, condition)
+
+    def _unique_group_overrides(self):
+        unique: list[tuple[list[int], EventKernelFlow]] = []
+        for group, model in self.group_overrides.items():
+            for groups, known_model in unique:
+                if model is known_model:
+                    groups.append(group)
+                    break
+            else:
+                unique.append(([group], model))
+        return unique
 
 
 @dataclass(frozen=True)
@@ -167,6 +227,7 @@ class FlowDensity:
     distance: FlowSourceDistance
     l_deg: float
     b_deg: float
+    event_rate_included: bool = False
 
     def with_source_evidence(self, evidence: Any) -> "FlowDensity":
         distance_pc = np.asarray(self.distance.distance_pc)

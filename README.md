@@ -61,6 +61,28 @@ partially rate-removed release is intended for prior evaluation and modest diagn
 sampling; do not use `sample()` as the bulk proposal for high-precision,
 rate-weighted or exponentially tilted Monte Carlo.
 
+For high-precision population Monte Carlo, use the separately validated
+rate-included release:
+
+```python
+model.set_flow(release="rate-included-v1")
+prior = model.galactic_model(isochrone)
+sample = prior.sample(key)
+```
+
+Its source-group conditional experts were trained directly on raw genulens
+`wtj`, and its component-resolved source grid is the matching event-rate
+`(DS, component)` marginal. The NSD and halo use the balanced rare-group
+expert; the three major groups use the full-grid raw-`wtj` kernel. The complete
+package is released against independent genulens holdouts:
+the joint five-dimensional state, derived `DL/DS`, `mu_rel`, `theta_E`, and
+`t_E`, source-group fractions, and rank-correlation structure all pass the
+limits recorded in its manifest. Consequently `log_density()` and `sample()`
+do not apply a second rate factor or importance correction.
+`include_event_rate=False` is rejected for this release because the factor
+cannot be removed after training. The coverage and `REMNANT=0`, `BINARY=0`
+restrictions are the same as `default`.
+
 `log_density(..., magnitudes=...)` conditions the event prior on the supplied
 photometry, but does not include the photometry as an additional source prior.
 Use `log_source_density(ds=..., magnitudes=...)` when that factor belongs in an
