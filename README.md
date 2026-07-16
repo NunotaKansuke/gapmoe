@@ -89,7 +89,7 @@ Without parallax, Flow-backed models use deterministic importance integration:
 ```python
 prior = galaxy.parameterize(
     gapmoe.ParamType(parallax=False, distance="marginalize"),
-    integration_samples=256,
+    integration_samples=512,
     seed=0,
 )
 ```
