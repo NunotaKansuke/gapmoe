@@ -208,6 +208,40 @@ class CmdPriorEvaluator:
             self._bilinear_all_components(absolute_reference, absolute_color, self.log_radius_square_moment_by_component),
         )
 
+    def theta_star_log_density_all_components(
+        self,
+        reference_magnitude: float,
+        color: float,
+        magnitude_offsets: jnp.ndarray,
+        *,
+        theta_star_mas: float,
+        ds_kpc: float,
+    ) -> jnp.ndarray:
+        """Return ``p(log thetaS | CMD, DS, component)``."""
+
+        density = self.density_all_components(
+            reference_magnitude, color, magnitude_offsets
+        )
+        first, second = self.log_radius_moments_all_components(
+            reference_magnitude, color, magnitude_offsets
+        )
+        safe_density = jnp.where(density > 0.0, density, 1.0)
+        mean_log_radius = first / safe_density
+        variance_log_radius = jnp.maximum(
+            second / safe_density - mean_log_radius**2,
+            1.0e-12,
+        )
+        sigma = jnp.sqrt(variance_log_radius)
+        mean_log_theta = (
+            mean_log_radius
+            + jnp.log(4.650467260962157)
+            - jnp.log(ds_kpc * 1000.0)
+        )
+        z = (jnp.log(theta_star_mas) - mean_log_theta) / sigma
+        value = jnp.exp(-0.5 * z**2) / (sigma * jnp.sqrt(2.0 * jnp.pi))
+        valid = (density > 0.0) & (theta_star_mas > 0.0) & (ds_kpc > 0.0)
+        return jnp.where(valid & jnp.isfinite(value), value, 0.0)
+
     def _bilinear_all_components(
         self,
         reference: jnp.ndarray,
@@ -570,6 +604,7 @@ class HistogramDensity:
         reference_magnitude: float,
         color: float,
         magnitude_offsets: jnp.ndarray,
+        source_component_factor: jnp.ndarray | None = None,
     ) -> jnp.ndarray:
         """Joint density in event variables and apparent CMD coordinates.
 
@@ -584,6 +619,10 @@ class HistogramDensity:
             color,
             magnitude_offsets,
         )
+        if source_component_factor is not None:
+            photometric_density = photometric_density * jnp.asarray(
+                source_component_factor
+            )
         source_values = self.distance.source_component_values(DS)
         source_norm = jnp.where(self.distance.source_norm > 0.0, self.distance.source_norm, 1.0)
         component_values = source_values * photometric_density / source_norm

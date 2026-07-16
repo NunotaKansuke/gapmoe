@@ -259,8 +259,11 @@ class FlowDensity:
         reference_magnitude: Any,
         color: Any,
         magnitude_offsets: Any,
+        source_component_factor: Any = None,
     ):
         photometric = cmd_prior.density_all_components(reference_magnitude, color, magnitude_offsets)
+        if source_component_factor is not None:
+            photometric = photometric * jnp.asarray(source_component_factor)
         component_density = self.distance.source_component_values(ds) * photometric / self.distance.source_norm
         return self._combine_kernel(ml, dl, ds, mu_n, mu_e, component_density)
 

@@ -115,6 +115,38 @@ class SourceCmdPrior:
             sigma_log_rsun=jnp.where(valid, sigma_log_radius, jnp.nan),
         )
 
+    def log_theta_star_density_at_distance(
+        self,
+        ds_kpc: Any,
+        reference_magnitude: Any,
+        color: Any,
+        theta_star_mas: Any,
+        *,
+        context: Context = None,
+    ):
+        """Return ``log p(log thetaS | DS, apparent CMD)``."""
+
+        offsets = self.offset_calculator(ds_kpc, context)
+        photometric = self.cmd_prior.density_all_components(
+            reference_magnitude, color, offsets
+        )
+        theta_density = self.cmd_prior.theta_star_log_density_all_components(
+            reference_magnitude,
+            color,
+            offsets,
+            theta_star_mas=theta_star_mas,
+            ds_kpc=ds_kpc,
+        )
+        components = self.density.distance.source_component_values(ds_kpc)
+        weights = components * photometric
+        denominator = jnp.sum(weights)
+        value = jnp.where(
+            denominator > 0.0,
+            jnp.sum(weights * theta_density) / denominator,
+            0.0,
+        )
+        return jnp.where(value > 0.0, jnp.log(value), -jnp.inf)
+
     def marginal_density(self, reference_magnitude: Any, color: Any, *, context: Context = None):
         """Return the marginal source-CMD prior p(CMD | l,b)."""
 
@@ -188,11 +220,23 @@ class EventPrior5D:
         *,
         reference_magnitude: Any,
         color: Any,
+        theta_star_mas: Any | None = None,
         context: Context = None,
     ):
         """Evaluate the joint event and source-photometry density."""
 
         offsets = self.source_prior.offset_calculator(ds, context)
+        source_component_factor = None
+        if theta_star_mas is not None:
+            source_component_factor = (
+                self.source_prior.cmd_prior.theta_star_log_density_all_components(
+                    reference_magnitude,
+                    color,
+                    offsets,
+                    theta_star_mas=theta_star_mas,
+                    ds_kpc=ds,
+                )
+            )
         value = self.density.log_cmd_joint_density(
             ml,
             dl,
@@ -203,6 +247,7 @@ class EventPrior5D:
             reference_magnitude=reference_magnitude,
             color=color,
             magnitude_offsets=offsets,
+            source_component_factor=source_component_factor,
         )
         if self.include_event_rate and not getattr(self.density, "event_rate_included", False):
             rate = (

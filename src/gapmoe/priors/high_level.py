@@ -248,7 +248,14 @@ class GalaxyModel:
             context=context,
         )
 
-    def log_joint_density(self, theta: Any, *, magnitudes: Mapping[str, Any], context: Context = None):
+    def log_joint_density(
+        self,
+        theta: Any,
+        *,
+        magnitudes: Mapping[str, Any],
+        theta_star_mas: Any | None = None,
+        context: Context = None,
+    ):
         """Evaluate the joint event and source-photometry density."""
 
         ml, dl, ds, mu_n, mu_e = theta[:5]
@@ -261,6 +268,7 @@ class GalaxyModel:
             mu_e,
             reference_magnitude=reference_magnitude,
             color=color,
+            theta_star_mas=theta_star_mas,
             context=context,
         )
 
@@ -271,6 +279,7 @@ class GalaxyModel:
         integration_samples: int = 256,
         direction_samples: int = 32,
         seed: int = 0,
+        source_radius: bool = False,
     ):
         """Return this physical density expressed in light-curve parameters."""
 
@@ -282,6 +291,7 @@ class GalaxyModel:
             integration_samples=integration_samples,
             direction_samples=direction_samples,
             seed=seed,
+            source_radius=source_radius,
         )
 
     def log_source_density(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
@@ -300,6 +310,31 @@ class GalaxyModel:
         reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
         return self._conditional_prior.source_prior.source_radius_at_distance(
             ds, reference_magnitude, color, context=context
+        )
+
+    def log_theta_star_density(
+        self,
+        *,
+        theta_star_mas: Any,
+        ds: Any,
+        magnitudes: Mapping[str, Any],
+        context: Context = None,
+    ):
+        """Return ``log p(log thetaS | DS, apparent magnitudes)``."""
+
+        if self.isochrone.table.log_radius_moment_by_component is None:
+            raise RuntimeError(
+                "isochrone table has no radius moments; rebuild it with the current gapmoe version"
+            )
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(
+            magnitudes
+        )
+        return self._conditional_prior.source_prior.log_theta_star_density_at_distance(
+            ds,
+            reference_magnitude,
+            color,
+            theta_star_mas,
+            context=context,
         )
 
     def sample_kernel(self, key: Any, *, ds: Any, source_group: int):

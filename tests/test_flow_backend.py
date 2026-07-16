@@ -11,10 +11,12 @@ from gapmoe.priors.high_level import IsochroneModel
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
 
-def _isochrone(*, selected: bool = False) -> IsochroneModel:
+def _isochrone(*, selected: bool = False, source_radius: bool = False) -> IsochroneModel:
     reference_edges = np.linspace(-8.0, 20.0, 57)
     color_edges = np.linspace(-2.0, 8.0, 41)
     density = np.full((11, 56, 40), 1.0 / (28.0 * 10.0))
+    mean_log_radius = np.log(8.0)
+    variance_log_radius = 0.3**2
     return IsochroneModel(
         reference_band="Imag",
         color_bands=("Vmag", "Imag"),
@@ -25,8 +27,13 @@ def _isochrone(*, selected: bool = False) -> IsochroneModel:
             reference_edges=reference_edges,
             color_edges=color_edges,
             density_by_component=density,
-            log_radius_moment_by_component=np.zeros_like(density),
-            log_radius_square_moment_by_component=np.zeros_like(density),
+            log_radius_moment_by_component=(
+                density * mean_log_radius if source_radius else np.zeros_like(density)
+            ),
+            log_radius_square_moment_by_component=(
+                density * (mean_log_radius**2 + variance_log_radius)
+                if source_radius else np.zeros_like(density)
+            ),
             component_indices=np.arange(11),
         ),
     )
@@ -157,6 +164,70 @@ def test_no_parallax_flow_marginalizes_distances_with_fixed_importance_points():
     assert draw["ML"] > 0.0
     assert 0.0 < draw["DL"] < draw["DS"]
     assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+
+
+def test_no_parallax_flow_jointly_integrates_isochrone_source_radius():
+    galaxy = Model().set(
+        l=0.25,
+        b=-3.75,
+        extinction={"Imag": 1.2, "Vmag": 2.0},
+    ).set_flow(release="rate-included-v1").galactic_model(
+        _isochrone(source_radius=True)
+    )
+    prior = galaxy.parameterize(
+        ParamType(parallax=False),
+        integration_samples=64,
+        seed=2,
+        source_radius=True,
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    magnitudes = {"Imag": 18.0, "Vmag": 20.0}
+
+    direct_matched = galaxy.log_theta_star_density(
+        theta_star_mas=0.004650467260962157,
+        ds=8.0,
+        magnitudes=magnitudes,
+    )
+    direct_mismatched = galaxy.log_theta_star_density(
+        theta_star_mas=0.04,
+        ds=8.0,
+        magnitudes=magnitudes,
+    )
+    log_theta_center = np.log(0.004650467260962157)
+    log_theta_grid = np.linspace(
+        log_theta_center - 6.0 * 0.3,
+        log_theta_center + 6.0 * 0.3,
+        401,
+    )
+    theta_density = jax.vmap(
+        lambda log_theta: jax.numpy.exp(
+            galaxy.log_theta_star_density(
+                theta_star_mas=jax.numpy.exp(log_theta),
+                ds=8.0,
+                magnitudes=magnitudes,
+            )
+        )
+    )(jax.numpy.asarray(log_theta_grid))
+
+    matched = prior.log_joint_density(
+        theta,
+        context={"thS": 0.005},
+        magnitudes=magnitudes,
+    )
+    mismatched = prior.log_joint_density(
+        theta,
+        context={"thS": 0.05},
+        magnitudes=magnitudes,
+    )
+
+    assert np.isfinite(matched)
+    assert matched > mismatched
+    assert direct_matched > direct_mismatched
+    assert np.trapezoid(np.asarray(theta_density), log_theta_grid) == pytest.approx(
+        1.0, rel=1.0e-4
+    )
+    with pytest.raises(ValueError, match="use log_joint_density"):
+        prior.log_density(theta, context={"thS": 0.005})
 
 
 def test_no_parallax_importance_integral_applies_hidden_physical_prior():
