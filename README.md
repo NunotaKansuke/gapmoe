@@ -83,6 +83,11 @@ do not apply a second rate factor or importance correction.
 cannot be removed after training. The coverage and `REMNANT=0`, `BINARY=0`
 restrictions are the same as `default`.
 
+The executed
+[`flow_galactic_model.ipynb`](example/flow_galactic_model.ipynb) example covers
+initialization and density evaluation, `emcee` sampling versus matching
+weighted genulens rows, and integration with source magnitude/color data.
+
 `log_density(..., magnitudes=...)` conditions the event prior on the supplied
 photometry, but does not include the photometry as an additional source prior.
 Use `log_source_density(ds=..., magnitudes=...)` when that factor belongs in an
