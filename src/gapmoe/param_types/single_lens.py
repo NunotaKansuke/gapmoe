@@ -2,7 +2,7 @@
 
 Each class maps a single-lens light-curve parameter vector to the five physical
 parameters ``(ML, DL, DS, mu_N, mu_E)`` used by the Galactic density model, and
-provides the corresponding log-Jacobian for use with ``GalacticModel``.
+provides the corresponding log-Jacobian for ``GalaxyModel.parameterize()``.
 
 Two variants are provided:
 

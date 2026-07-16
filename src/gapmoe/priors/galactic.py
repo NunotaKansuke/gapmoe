@@ -15,7 +15,7 @@ ThetaMuValues = tuple[float, float]
 ExtraLogPrior = Callable[[float, float, float, float, float], float]
 
 
-class GalacticModel:
+class _ParameterizedNumpyEngine:
     """Compose a Galactic density model with event-rate and optional mappings.
 
     Physical parameters use kpc for DL and DS.
@@ -482,7 +482,7 @@ class GalacticModel:
             return _raw_values(theta, args), 0.0
 
         if args:
-            raise TypeError("GalacticModel with a param_type expects one theta object, not raw arguments.")
+            raise TypeError("a parameterized galaxy expects one theta object, not raw arguments.")
         values = _coerce_values(self.param_type.to_physical(theta, context))
         log_jacobian = self.param_type.log_abs_det_jacobian(theta, context)
         return values, log_jacobian

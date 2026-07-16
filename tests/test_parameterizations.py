@@ -17,8 +17,8 @@ from gapmoe.param_types import (
     calc_vEarth,
     from_model_spec,
 )
-from gapmoe.priors.galactic import GalacticModel
-from gapmoe.priors.mapped import MappedGalacticModel
+from gapmoe.priors.galactic import _ParameterizedNumpyEngine
+from gapmoe.priors.galactic_jax import _ParameterizedJaxEngine
 
 
 # Representative context: values at event peak
@@ -118,6 +118,7 @@ def test_binary_circular_names():
     p = BinaryCircularParamType()
     assert len(p.names) == 12
     assert p.names[3] == "rho"
+    assert p.names[-3:] == ("g1", "g2", "g3")
 
 
 def test_binary_circular_use_thE_names():
@@ -129,8 +130,8 @@ def test_binary_circular_use_thE_names():
 def test_binary_kepler_names():
     p = BinaryKeplerParamType()
     assert len(p.names) == 14
-    assert "r_s" in p.names
-    assert "a_s" in p.names
+    assert "lom_szs" in p.names
+    assert "lom_ar" in p.names
 
 
 def test_single_lens_names():
@@ -280,7 +281,7 @@ def test_kepler_invalid_orbit_is_rejected_before_density():
             return 0.0
 
     density = CountingDensity()
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         density,
         param_type=ParamType(parallax=True, orbital_motion="kepler"),
         include_event_rate=False,
@@ -373,7 +374,7 @@ class _DummyDensity:
 
 
 def test_galactic_prior_accepts_impl_selector_directly():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True),
         include_event_rate=False,
@@ -383,7 +384,7 @@ def test_galactic_prior_accepts_impl_selector_directly():
 
 
 def test_galactic_prior_exposes_physical_and_transform_apis():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True),
         include_event_rate=False,
@@ -402,7 +403,7 @@ def test_galactic_prior_exposes_physical_and_transform_apis():
 
 
 def test_galactic_prior_exposes_only_deterministic_values_for_static_parallax_marginalized_distance():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True, distance="marginalize"),
         include_event_rate=False,
@@ -418,7 +419,7 @@ def test_galactic_prior_exposes_only_deterministic_values_for_static_parallax_ma
 
 
 def test_galactic_prior_exposes_only_deterministic_values_for_no_parallax_marginalized_distance():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,
@@ -438,7 +439,7 @@ def test_galactic_prior_exposes_only_deterministic_values_for_no_parallax_margin
 
 
 def test_galactic_prior_samples_orbital_derived_parameters():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True, orbital_motion="circular"),
         include_event_rate=False,
@@ -462,7 +463,7 @@ def test_galactic_prior_parallax_static_can_marginalize_ds():
     p = ParamType(parallax=True, distance="marginalize")
     assert p.names == ("t0", "tE", "u0", "rho", "piEN", "piEE")
 
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=p,
         include_event_rate=False,
@@ -476,7 +477,7 @@ def test_galactic_prior_parallax_static_can_marginalize_ds():
 
 
 def test_galactic_prior_parallax_static_samples_marginalized_ds():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True, distance="marginalize"),
         include_event_rate=False,
@@ -492,7 +493,7 @@ def test_galactic_prior_parallax_static_samples_marginalized_ds():
 
 
 def test_galactic_prior_parallax_static_samples_marginalized_ds_array():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=True, distance="marginalize"),
         include_event_rate=False,
@@ -510,7 +511,7 @@ def test_galactic_prior_parallax_static_samples_marginalized_ds_array():
 
 
 def test_galactic_prior_without_impl_accepts_physical_values():
-    prior = GalacticModel(_DummyDensity(), include_event_rate=False)
+    prior = _ParameterizedNumpyEngine(_DummyDensity(), include_event_rate=False)
     physical = (1.0, 4.0, 8.0, 2.0, -1.0)
 
     assert prior.to_physical(physical) == physical
@@ -519,7 +520,7 @@ def test_galactic_prior_without_impl_accepts_physical_values():
 
 
 def test_galactic_prior_no_parallax_marginalizes_distances_by_default():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,
@@ -538,7 +539,7 @@ def test_galactic_prior_no_parallax_marginalizes_distances_by_default():
 
 
 def test_galactic_prior_no_parallax_samples_marginalized_distances():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,
@@ -558,7 +559,7 @@ def test_galactic_prior_no_parallax_samples_marginalized_distances():
 
 
 def test_galactic_prior_no_parallax_samples_marginalized_distances_array():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,
@@ -583,7 +584,7 @@ def test_galactic_prior_no_parallax_samples_marginalized_distances_array():
 
 
 def test_galactic_prior_sample_physical_rejects_higher_rank_theta():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,
@@ -598,7 +599,7 @@ def test_galactic_prior_sample_physical_rejects_higher_rank_theta():
 
 
 def test_galactic_prior_no_parallax_can_sample_distances():
-    prior = GalacticModel(
+    prior = _ParameterizedNumpyEngine(
         _DummyDensity(),
         param_type=ParamType(parallax=False, distance="sample"),
         include_event_rate=False,
@@ -618,7 +619,7 @@ def test_galactic_prior_no_parallax_can_sample_distances():
 
 
 def test_jax_prior_with_binary_impl_is_jittable():
-    prior = MappedGalacticModel(
+    prior = _ParameterizedJaxEngine(
         _DummyJaxDensity(),
         param_type=BinaryCircularParamType(),
         include_event_rate=False,
@@ -633,7 +634,7 @@ def test_jax_prior_with_binary_impl_is_jittable():
 
 
 def test_jax_galactic_prior_exposes_physical_and_transform_apis():
-    prior = MappedGalacticModel(
+    prior = _ParameterizedJaxEngine(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=True),
         include_event_rate=False,
@@ -655,7 +656,7 @@ def test_jax_galactic_prior_exposes_physical_and_transform_apis():
 
 
 def test_jax_galactic_prior_parallax_static_can_marginalize_ds():
-    prior = MappedGalacticModel(
+    prior = _ParameterizedJaxEngine(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=True, distance="marginalize"),
         include_event_rate=False,
@@ -670,7 +671,7 @@ def test_jax_galactic_prior_parallax_static_can_marginalize_ds():
 
 
 def test_jax_galactic_prior_no_parallax_marginalizes_distances_by_default():
-    prior = MappedGalacticModel(
+    prior = _ParameterizedJaxEngine(
         _DummyJaxDensity(),
         param_type=ParamType(parallax=False),
         include_event_rate=False,

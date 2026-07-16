@@ -42,6 +42,61 @@ sample_given_photometry = prior.sample(
 )
 ```
 
+To express the same physical density in microlensing light-curve parameters,
+attach an independent parameterization:
+
+```python
+params = gapmoe.ParamType(
+    lens="binary",
+    parallax=True,
+    orbital_motion="static",
+    distance="marginalize",
+)
+light_curve_prior = prior.parameterize(params)
+
+context = {"thS": 0.005, "vEarth": (v_north, v_east)}
+logp = light_curve_prior.log_density(theta, context=context)
+```
+
+Priors that depend on hidden physical integration variables belong inside the
+parameterized Galactic prior:
+
+```python
+import jax.numpy as jnp
+
+@light_curve_prior.prior
+def physical_bounds(ML, DL, DS, **_):
+    valid = (ML > 0.01) & (DL > 0.0) & (DL < DS)
+    return jnp.where(valid, 0.0, -jnp.inf)
+```
+
+These callables are evaluated inside distance marginalization and must be
+JAX-compatible for Flow-backed models.
+
+The parameterized object owns its physical transform, Jacobian, and hidden
+distance integration. It remains independent of any sampler and exposes the
+small `names`/`log_density` protocol expected by downstream inference tools.
+
+Without parallax, Flow-backed models use deterministic importance integration:
+
+```python
+prior = galaxy.parameterize(
+    gapmoe.ParamType(parallax=False, distance="marginalize"),
+    integration_samples=256,
+    seed=0,
+)
+```
+
+The proposal draws `DS` from the packaged source-distance measure, uses a
+full-support `DL/DS` proposal fitted from fast Flow samples, and samples the
+proper-motion direction uniformly. Fixed Halton points are reused at every
+evaluation, so the MCMC target is deterministic. With `distance="sample"`,
+`DL` and `DS` are explicit parameters and only the proper-motion direction is
+integrated; `direction_samples=32` controls that quadrature.
+
+Circular and Kepler orbital-motion parameterizations use lcbinint's canonical
+names `g1`, `g2`, `g3`, `lom_szs`, and `lom_ar` directly.
+
 The release covers `-5 <= l <= 5` and `-6 <= b <= -2` degrees with
 `REMNANT=0` and `BINARY=0`. It models
 `p(ML, DL, mu_E, mu_N | DS, source_group, l, b)`. The packaged source-distance
@@ -162,5 +217,7 @@ pytest -q
 ## Public API
 
 - `gapmoe.Model`
+- `gapmoe.ParamType`
 - `gapmoe.SourcePopulation`
 - `gapmoe.AgeMetallicityPoint`
+- `gapmoe.calc_vEarth`

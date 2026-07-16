@@ -15,7 +15,7 @@ ThetaMuValues = tuple[float, float]
 ExtraLogPrior = Callable[[float, float, float, float, float], jnp.ndarray]
 
 
-class MappedGalacticModel:
+class _ParameterizedJaxEngine:
     """JAX prior composition for density backends with a JAX log_density method.
 
     Physical parameters use kpc for DL and DS.
@@ -239,7 +239,7 @@ class MappedGalacticModel:
             return _raw_values(theta, args), jnp.asarray(0.0)
 
         if args:
-            raise TypeError("MappedGalacticModel with a param_type expects one theta object, not raw arguments.")
+            raise TypeError("a parameterized galaxy expects one theta object, not raw arguments.")
         values = _coerce_values(self.param_type.to_physical(theta, context))
         log_jacobian = self.param_type.log_abs_det_jacobian(theta, context)
         return values, log_jacobian

@@ -8,10 +8,10 @@ import pytest
 
 from gapmoe.density import HistogramDensity
 from gapmoe.density.histogram_tables import HistogramTables
-from gapmoe.priors.cmd import CmdGalacticModel
-from gapmoe.priors.galactic import GalacticModel
+from gapmoe.priors.cmd import _CmdGalacticModel
+from gapmoe.priors.galactic import _ParameterizedNumpyEngine
 from gapmoe.priors.high_level import GalaxyModel as SourceAwareGalaxyModel, IsochroneModel
-from gapmoe.priors.mapped import MappedGalacticModel
+from gapmoe.priors.galactic_jax import _ParameterizedJaxEngine
 from gapmoe.priors.source import EventPrior5D, SourceCmdPrior
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
@@ -34,7 +34,7 @@ def test_histogram_prior_is_finite(histogram_density: HistogramDensity) -> None:
     ml, dl, ds, mu_n, mu_e = raw_point()
     log_density = histogram_density.log_density(ml, dl, ds, mu_n, mu_e)
     log_prior = histogram_density.log_prior(ml, dl, ds, mu_n, mu_e)
-    composed = GalacticModel(histogram_density).log_prob(ml, dl, ds, mu_n, mu_e)
+    composed = _ParameterizedNumpyEngine(histogram_density).log_prob(ml, dl, ds, mu_n, mu_e)
 
     assert isfinite(log_density)
     assert isfinite(log_prior)
@@ -69,8 +69,8 @@ def test_distance_marginalized_theta_mu_density_is_finite(histogram_density: His
 def test_histogram_jits(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     ml, dl, ds, mu_n, mu_e = raw_point()
-    numpy_log_prob = GalacticModel(histogram_density).log_prob(ml, dl, ds, mu_n, mu_e)
-    jax_prior = MappedGalacticModel(histogram_density)
+    numpy_log_prob = _ParameterizedNumpyEngine(histogram_density).log_prob(ml, dl, ds, mu_n, mu_e)
+    jax_prior = _ParameterizedJaxEngine(histogram_density)
     jax_log_prob = float(jax_prior.log_prob(ml, dl, ds, mu_n, mu_e))
 
     jit_log_density = float(jax.jit(histogram_density.log_density)(ml, dl, ds, mu_n, mu_e))
@@ -127,7 +127,7 @@ def test_cmd_galactic_model_extracts_source_photometry_from_mcmc_state(histogram
         cmd_prior=cmd_prior,
         offset_calculator=lambda ds, context: jnp.zeros(3),
     )
-    model = CmdGalacticModel(
+    model = _CmdGalacticModel(
         event_prior=EventPrior5D(histogram_density, source, include_event_rate=False),
         cmd_extractor=lambda theta, context: (theta[5], theta[6]),
     )

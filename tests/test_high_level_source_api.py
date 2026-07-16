@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from gapmoe import AgeMetallicityPoint, Model, SourcePopulation
+from gapmoe import AgeMetallicityPoint, Model, ParamType, SourcePopulation
 from gapmoe.pre_runner import PreRunResult
 from gapmoe.priors.high_level import IsochroneModel
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable, GenulensSourceModel
@@ -84,6 +84,16 @@ def test_isochrone_converts_named_magnitudes_to_its_internal_coordinates():
     assert chart.values_from_magnitudes({"Imag": 19.0, "Vmag": 21.0}) == (19.0, 2.0)
     with pytest.raises(ValueError, match="Vmag"):
         chart.values_from_magnitudes({"Imag": 19.0})
+
+
+def test_public_api_exposes_only_the_parameterization_selector():
+    import gapmoe
+    import gapmoe.priors as priors
+
+    assert gapmoe.ParamType is ParamType
+    assert not hasattr(priors, "GalacticModel")
+    assert not hasattr(priors, "MappedGalacticModel")
+    assert not hasattr(priors, "CmdGalacticModel")
 
 
 def test_prepare_requires_a_sightline(tmp_path, fake_genulens_root):

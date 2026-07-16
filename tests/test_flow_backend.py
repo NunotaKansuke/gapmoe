@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import jax
 import numpy as np
+import pytest
 
-from gapmoe import Model
+from gapmoe import Model, ParamType
 from gapmoe.density import EventKernelFlow
 from gapmoe.flow_package import FlowPackage
 from gapmoe.priors.high_level import IsochroneModel
@@ -61,6 +62,153 @@ def test_bundled_flow_density_is_jittable():
     value = compiled(np.asarray((0.3, 4.0, 8.0, 3.0, -2.0)))
 
     assert np.isfinite(value)
+
+
+def test_bundled_flow_parameterizes_and_marginalizes_source_distance():
+    galaxy = Model().set(l=0.25, b=-3.75).set_flow(
+        release="rate-included-v1"
+    ).galactic_model(_isochrone())
+    prior = galaxy.parameterize(
+        ParamType(parallax=True, distance="marginalize")
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005, 0.1, 0.05))
+    context = {"thS": 0.005, "vEarth": (0.0, 0.0)}
+
+    value = jax.jit(prior.log_density)(theta, context=context)
+    physical = prior.to_deterministic_physical(theta, context=context)
+
+    assert prior.names == ("t0", "tE", "u0", "rho", "piEN", "piEE")
+    assert np.isfinite(value)
+    assert set(physical) == {"thetaE", "piE", "ML", "mu_N", "mu_E"}
+
+
+def test_parameterized_flow_applies_prior_inside_source_distance_integral():
+    galaxy = Model().set(l=0.25, b=-3.75).set_flow(
+        release="rate-included-v1"
+    ).galactic_model(_isochrone())
+    baseline = galaxy.parameterize(
+        ParamType(parallax=True, distance="marginalize")
+    )
+    constrained = galaxy.parameterize(
+        ParamType(parallax=True, distance="marginalize")
+    )
+
+    @constrained.prior
+    def _(DS, **params):
+        del params
+        return jax.numpy.where(DS >= 6.0, 0.0, -jax.numpy.inf)
+
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005, 0.1, 0.05))
+    context = {"thS": 0.005, "vEarth": (0.0, 0.0)}
+    baseline_value = baseline.log_density(theta, context=context)
+    constrained_value = constrained.log_density(theta, context=context)
+    draw = constrained.sample_physical(
+        theta,
+        context=context,
+        rng=np.random.default_rng(3),
+    )
+
+    assert np.isfinite(constrained_value)
+    assert constrained_value < baseline_value
+    assert draw["DS"] >= 6.0
+
+
+def test_parameterized_flow_evaluates_joint_source_photometry():
+    galaxy = Model().set(
+        l=0.25,
+        b=-3.75,
+        extinction={"Imag": 1.2, "Vmag": 2.0},
+    ).set_flow(release="rate-included-v1").galactic_model(_isochrone())
+    prior = galaxy.parameterize(ParamType(parallax=True, distance="sample"))
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005, 0.1, 0.05, 8.0))
+    context = {"thS": 0.005, "vEarth": (0.0, 0.0)}
+
+    value = prior.log_joint_density(
+        theta,
+        context=context,
+        magnitudes={"Imag": 18.0, "Vmag": 20.0},
+    )
+
+    assert np.isfinite(value)
+
+
+def test_no_parallax_flow_marginalizes_distances_with_fixed_importance_points():
+    galaxy = Model().set(l=0.25, b=-3.75).set_flow(
+        release="rate-included-v1"
+    ).galactic_model(_isochrone())
+    prior = galaxy.parameterize(
+        ParamType(parallax=False),
+        integration_samples=32,
+        seed=2,
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+
+    first = prior.log_density(theta, context=context)
+    second = prior.log_density(theta, context=context)
+    draw = prior.sample_physical(
+        theta,
+        context=context,
+        rng=np.random.default_rng(4),
+    )
+
+    assert np.isfinite(first)
+    assert first == second
+    assert draw["ML"] > 0.0
+    assert 0.0 < draw["DL"] < draw["DS"]
+    assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+
+
+def test_no_parallax_importance_integral_applies_hidden_physical_prior():
+    galaxy = Model().set(l=0.25, b=-3.75).set_flow(
+        release="rate-included-v1"
+    ).galactic_model(_isochrone())
+    prior = galaxy.parameterize(
+        ParamType(parallax=False),
+        integration_samples=64,
+        seed=3,
+    )
+
+    @prior.prior
+    def _(DS, **params):
+        del params
+        return jax.numpy.where(DS >= 6.0, 0.0, -jax.numpy.inf)
+
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+    value = prior.log_density(theta, context=context)
+    draw = prior.sample_physical(
+        theta,
+        context=context,
+        rng=np.random.default_rng(7),
+    )
+
+    assert np.isfinite(value)
+    assert draw["DS"] >= 6.0
+
+
+def test_no_parallax_flow_samples_distances_and_integrates_direction():
+    galaxy = Model().set(l=0.25, b=-3.75).set_flow(
+        release="rate-included-v1"
+    ).galactic_model(_isochrone())
+    prior = galaxy.parameterize(
+        ParamType(parallax=False, distance="sample"),
+        direction_samples=16,
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005, 4.0, 8.0))
+    context = {"thS": 0.005}
+
+    value = prior.log_density(theta, context=context)
+    draw = prior.sample_physical(
+        theta,
+        context=context,
+        rng=np.random.default_rng(5),
+    )
+
+    assert np.isfinite(value)
+    assert draw["DL"] == pytest.approx(4.0)
+    assert draw["DS"] == pytest.approx(8.0)
+    assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
 
 
 def test_bundled_flow_samples_the_full_source_aware_prior():

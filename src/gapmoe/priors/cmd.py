@@ -14,7 +14,7 @@ def _first_five(theta: Any, context: Context) -> tuple[Any, Any, Any, Any, Any]:
 
 
 @dataclass(frozen=True)
-class CmdGalacticModel:
+class _CmdGalacticModel:
     """Conditional five-dimensional Galactic prior for an MCMC state.
 
     The default is p(event | CMD). Set ``include_cmd_prior=True`` only when

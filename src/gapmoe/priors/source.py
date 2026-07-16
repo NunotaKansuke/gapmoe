@@ -177,3 +177,38 @@ class EventPrior5D:
             )
             value = value + rate
         return value
+
+    def log_joint_density(
+        self,
+        ml: Any,
+        dl: Any,
+        ds: Any,
+        mu_n: Any,
+        mu_e: Any,
+        *,
+        reference_magnitude: Any,
+        color: Any,
+        context: Context = None,
+    ):
+        """Evaluate the joint event and source-photometry density."""
+
+        offsets = self.source_prior.offset_calculator(ds, context)
+        value = self.density.log_cmd_joint_density(
+            ml,
+            dl,
+            ds,
+            mu_n,
+            mu_e,
+            cmd_prior=self.source_prior.cmd_prior,
+            reference_magnitude=reference_magnitude,
+            color=color,
+            magnitude_offsets=offsets,
+        )
+        if self.include_event_rate and not getattr(self.density, "event_rate_included", False):
+            rate = (
+                log_flow_kernel_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+                if getattr(self.density, "event_rate_factor_includes_lens_area", False)
+                else log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+            )
+            value = value + rate
+        return value
