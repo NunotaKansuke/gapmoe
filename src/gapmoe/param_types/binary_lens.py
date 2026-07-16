@@ -2,15 +2,14 @@
 
 Each class maps a binary-lens light-curve parameter vector to the five physical
 parameters ``(ML, DL, DS, mu_N, mu_E)`` used by the Galactic density model, and
-provides the corresponding log-Jacobian for use with ``GalacticModel``.
+provides the corresponding log-Jacobian for ``GalaxyModel.parameterize()``.
 
 Two orbital models are provided:
 
 * **Circular** — the lens binary is assumed to be in a circular orbit at the
-  moment of the microlensing event, described by the instantaneous velocity
-  components ``(gamma1, gamma2, gamma3)``.
-* **Kepler** — the full Keplerian orbit is parameterized by ``(gamma1, gamma2,
-  gamma3, r_s, a_s)``.
+  moment of the microlensing event, described by lcbinint's instantaneous
+  velocity components ``(g1, g2, g3)``.
+* **Kepler** — the full Keplerian orbit adds ``(lom_szs, lom_ar)``.
 
 For each orbital model there is a *rho*-based variant (``rho`` = source radius
 in units of the Einstein radius) and a *thE*-based variant where the Einstein
@@ -386,14 +385,14 @@ class BinaryCircularParamType:
 
     Parameter vector ``theta`` must have 12 elements in this order:
 
-    ``(t0, tE, u0, rho, q, s, alpha, piEN, piEE, gamma1, gamma2, gamma3)``
+    ``(t0, tE, u0, rho, q, s, alpha, piEN, piEE, g1, g2, g3)``
 
     Required context keys: ``"thS"``, ``"vEarth"``.
     """
 
     names: tuple[str, ...] = (
         "t0", "tE", "u0", "rho", "q", "s", "alpha",
-        "piEN", "piEE", "gamma1", "gamma2", "gamma3",
+        "piEN", "piEE", "g1", "g2", "g3",
     )
     derived_names: tuple[str, ...] = (
         "q", "orbital_radi", "cos_i", "Om_NE", "phi0",
@@ -435,14 +434,14 @@ class BinaryCircularUseThEParamType:
 
     Parameter vector ``theta`` must have 12 elements:
 
-    ``(t0, tE, u0, thE, q, s, alpha, piEN, piEE, gamma1, gamma2, gamma3)``
+    ``(t0, tE, u0, thE, q, s, alpha, piEN, piEE, g1, g2, g3)``
 
     Required context key: ``"vEarth"`` (``"thS"`` is not needed).
     """
 
     names: tuple[str, ...] = (
         "t0", "tE", "u0", "thE", "q", "s", "alpha",
-        "piEN", "piEE", "gamma1", "gamma2", "gamma3",
+        "piEN", "piEE", "g1", "g2", "g3",
     )
     derived_names: tuple[str, ...] = (
         "q", "orbital_radi", "cos_i", "Om_NE", "phi0",
@@ -480,15 +479,15 @@ class BinaryKeplerParamType:
 
     Parameter vector ``theta`` must have 14 elements:
 
-    ``(t0, tE, u0, rho, q, s, alpha, piEN, piEE, gamma1, gamma2, gamma3, r_s, a_s)``
+    ``(t0, tE, u0, rho, q, s, alpha, piEN, piEE, g1, g2, g3, lom_szs, lom_ar)``
 
     Required context keys: ``"thS"``, ``"vEarth"``.
     """
 
     names: tuple[str, ...] = (
         "t0", "tE", "u0", "rho", "q", "s", "alpha",
-        "piEN", "piEE", "gamma1", "gamma2", "gamma3",
-        "r_s", "a_s",
+        "piEN", "piEE", "g1", "g2", "g3",
+        "lom_szs", "lom_ar",
     )
     derived_names: tuple[str, ...] = (
         "q", "orbital_radi", "e", "cos_i", "Om_NE", "om", "nu",

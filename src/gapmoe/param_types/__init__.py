@@ -5,7 +5,7 @@ parameters. The first five values are ``(ML, DL, DS, mu_N, mu_E)`` expected by
 the Galactic density model; orbital-motion param_types append derived orbital
 elements after those five values. Param_types also provide the log-Jacobian of
 the density-coordinate transformation for use with
-:class:`~gapmoe.priors.GalacticModel`.
+:meth:`~gapmoe.priors.high_level.GalaxyModel.parameterize`.
 
 **Choosing a param_type**
 
@@ -13,17 +13,22 @@ The public selector is ``ParamType``. It keeps the light-curve model
 choice in one small object and hides the concrete mapping class names::
 
     p = ParamType(lens="binary", parallax=True, orbital_motion="static")
-    prior = GalacticModel(density, param_type=p)
+    prior = galaxy.parameterize(p)
 
 ``parallax=True, orbital_motion="static"`` expects
 ``(t0, tE, u0, rho, piEN, piEE, DS)`` by default. Use
 ``distance="marginalize"`` to integrate over ``DS`` and expect
 ``(t0, tE, u0, rho, piEN, piEE)``. ``parallax=False`` expects
 ``(t0, tE, u0, rho)`` and marginalizes lens/source distances plus the
-proper-motion amplitude. Use ``distance="sample"`` to sample ``DL`` and ``DS``
+proper-motion direction. Use ``distance="sample"`` to sample ``DL`` and ``DS``
 explicitly. Binary lens orbital motion can be selected with
 ``orbital_motion="circular"`` or ``"kepler"``; distance marginalization is
 currently static-only.
+
+Flow-backed no-parallax models use fixed importance points for hidden
+``DL``, ``DS``, and proper-motion direction. Histogram backends continue to
+use their native precomputed projections when source photometry and additional
+hidden-physical priors do not require the uncollapsed integrand.
 
 The lower-level concrete classes remain available for advanced use and for
 backward compatibility.
@@ -52,7 +57,7 @@ protocol to add your own::
         def log_abs_det_jacobian(self, theta, context=None):
             return lndet
 
-    prior = GalacticModel(density, param_type=MyParam())
+    prior = galaxy.parameterize(MyParam())
 """
 
 __all__ = [

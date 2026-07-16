@@ -7,7 +7,7 @@ from jax import vmap
 from jax.scipy.special import logsumexp
 
 from gapmoe.param_types.base import MappingContext, ParamTypeProtocol
-from gapmoe.priors.event_rate_jax import jax_log_event_rate
+from gapmoe.priors.event_rate_backend import log_event_rate_backend
 
 PhysicalValues = tuple[Any, ...]
 MuPhysicalValues = tuple[float, float, float, float]
@@ -15,7 +15,7 @@ ThetaMuValues = tuple[float, float]
 ExtraLogPrior = Callable[[float, float, float, float, float], jnp.ndarray]
 
 
-class JaxGalacticModel:
+class _ParameterizedJaxEngine:
     """JAX prior composition for density backends with a JAX log_density method.
 
     Physical parameters use kpc for DL and DS.
@@ -69,7 +69,7 @@ class JaxGalacticModel:
         mu = jnp.hypot(mu_N, mu_E)
         logp = self.density.log_density(ML, DL, DS, mu_N, mu_E)
         if self.include_event_rate:
-            logp = logp + jax_log_event_rate(ML, DL, DS, mu)
+            logp = logp + log_event_rate_backend(ML, DL, DS, mu)
 
         if self.extra_log_prior is not None:
             logp = logp + self.extra_log_prior(ML, DL, DS, mu_N, mu_E)
@@ -86,7 +86,7 @@ class JaxGalacticModel:
         ML, DL, DS, mu = _raw_mu_values(values, args)
         logp = self.density.log_density_mu(ML, DL, DS, mu)
         if self.include_event_rate:
-            logp = logp + jax_log_event_rate(ML, DL, DS, mu)
+            logp = logp + log_event_rate_backend(ML, DL, DS, mu)
         return jnp.where(jnp.isfinite(logp), logp, -jnp.inf)
 
     def log_prob_theta_mu(self, values: Any, *args: Any) -> jnp.ndarray:
@@ -138,6 +138,45 @@ class JaxGalacticModel:
         """Convert light-curve parameters to ``(thetaE, mu)``."""
         values, _ = self._to_theta_mu_physical_with_jacobian(theta, context)
         return values
+
+    def to_deterministic_physical(
+        self,
+        theta: Any,
+        *,
+        context: Optional[MappingContext] = None,
+    ) -> dict[str, Any]:
+        """Return physical values that are deterministic for this theta."""
+        if self.param_type is None:
+            ML, DL, DS, mu_N, mu_E = _raw_values(theta, ())
+            return {
+                "ML": ML,
+                "DL": DL,
+                "DS": DS,
+                "mu_N": mu_N,
+                "mu_E": mu_E,
+            }
+
+        if hasattr(self.param_type, "to_deterministic_physical"):
+            try:
+                return dict(self.param_type.to_deterministic_physical(theta, context))
+            except TypeError:
+                pass
+
+        if self._uses_theta_mu_physical(()):
+            thetaE, mu = self.to_theta_mu_physical(theta, context=context)
+            return {"thetaE": thetaE, "mu": mu}
+
+        if self._uses_mu_physical(()):
+            ML, DL, DS, mu = self.to_mu_physical(theta, context=context)
+            return {"ML": ML, "DL": DL, "DS": DS, "mu": mu}
+
+        physical = self.to_physical(theta, context=context)
+        keys = ["ML", "DL", "DS", "mu_N", "mu_E"]
+        keys.extend(getattr(self.param_type, "derived_names", ()))
+        return {
+            key: value
+            for key, value in zip(keys, physical)
+        }
 
     def log_abs_det_jacobian(
         self,
@@ -200,7 +239,7 @@ class JaxGalacticModel:
             return _raw_values(theta, args), jnp.asarray(0.0)
 
         if args:
-            raise TypeError("JaxGalacticModel with a param_type expects one theta object, not raw arguments.")
+            raise TypeError("a parameterized galaxy expects one theta object, not raw arguments.")
         values = _coerce_values(self.param_type.to_physical(theta, context))
         log_jacobian = self.param_type.log_abs_det_jacobian(theta, context)
         return values, log_jacobian

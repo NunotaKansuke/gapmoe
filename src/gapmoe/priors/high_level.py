@@ -206,6 +206,42 @@ class GalaxyModel:
             context=context,
         )
 
+    def log_joint_density(self, theta: Any, *, magnitudes: Mapping[str, Any], context: Context = None):
+        """Evaluate the joint event and source-photometry density."""
+
+        ml, dl, ds, mu_n, mu_e = theta[:5]
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
+        return self._conditional_prior.log_joint_density(
+            ml,
+            dl,
+            ds,
+            mu_n,
+            mu_e,
+            reference_magnitude=reference_magnitude,
+            color=color,
+            context=context,
+        )
+
+    def parameterize(
+        self,
+        param_type: Any,
+        *,
+        integration_samples: int = 256,
+        direction_samples: int = 32,
+        seed: int = 0,
+    ):
+        """Return this physical density expressed in light-curve parameters."""
+
+        from .parameterized import ParameterizedGalaxyModel
+
+        return ParameterizedGalaxyModel(
+            self,
+            param_type,
+            integration_samples=integration_samples,
+            direction_samples=direction_samples,
+            seed=seed,
+        )
+
     def log_source_density(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
         """Evaluate p(apparent magnitudes | DS, l, b) from the source population."""
 

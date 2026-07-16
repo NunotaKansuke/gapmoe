@@ -33,8 +33,7 @@ def test_pre_runner_notebook_code_compiles_and_is_clear() -> None:
     assert "PreRunner" in source
     assert "runner.run(" in source
     assert "HistogramDensity.from_paths(" in source
-    assert "GalacticModel(density)" in source
-    assert "prior.log_prob(" in source
+    assert "density.log_density(" in source
 
     _assert_compiles(path, code_cells)
 
