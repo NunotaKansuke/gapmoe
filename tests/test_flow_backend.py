@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.scipy.special import logsumexp
 
 from gapmoe import Flow, Isochrone, Model, ParamType
 from gapmoe.density import EventKernelFlow
+from gapmoe.density.flow_backend import SOURCE_GROUP_MATRIX
 from gapmoe.flow_package import FlowPackage
 from gapmoe.priors.parameterized import _KAPPA, _mass_proposal_geometry
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
@@ -113,6 +116,34 @@ def test_bundled_flow_density_is_jittable():
     value = compiled(np.asarray((0.3, 4.0, 8.0, 3.0, -2.0)))
 
     assert np.isfinite(value)
+
+
+def test_flow_skips_zero_weight_groups_without_changing_exact_density():
+    density = _model(source=_isochrone(selected=True)).physical._selected_prior.density
+    ml, dl, ds, mu_n, mu_e = (0.3, 4.0, 8.0, 3.0, -2.0)
+    components = density.distance.source_component_values(ds) / density.distance.source_norm
+    group_density = SOURCE_GROUP_MATRIX @ components
+    conditions = jnp.column_stack(
+        (
+            jnp.full(5, density.l_deg),
+            jnp.full(5, density.b_deg),
+            jnp.full(5, ds),
+            jnp.eye(5),
+        )
+    )
+    values = jnp.broadcast_to(jnp.asarray((ml, dl, mu_e, mu_n)), (5, 4))
+    expected = logsumexp(
+        jnp.where(
+            group_density > 0.0,
+            jnp.log(group_density) + density.kernel.log_density(values, conditions),
+            -jnp.inf,
+        )
+    )
+
+    assert len(density.active_source_groups) < 5
+    assert density.log_density(ml, dl, ds, mu_n, mu_e) == pytest.approx(
+        float(expected), rel=1.0e-6
+    )
 
 
 def test_source_brightness_range_reweights_source_distance_without_extinction():
@@ -226,6 +257,47 @@ def test_no_parallax_flow_marginalizes_distances_with_fixed_importance_points():
     assert draw["ML"] > 0.0
     assert 0.0 < draw["DL"] < draw["DS"]
     assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+
+
+def test_no_parallax_source_group_qmc_matches_exact_fixed_selection():
+    options = {
+        "param_type": ParamType(parallax=False),
+        "source": _isochrone(selected=True),
+        "integration_samples": 512,
+        "seed": 2,
+    }
+    exact = _model(**options, source_group_integration="exact")
+    qmc = _model(**options, source_group_integration="qmc")
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+
+    exact_value = exact.log_density(theta, context=context)
+    qmc_value = qmc.log_density(theta, context=context)
+
+    assert np.isfinite(qmc_value)
+    assert qmc_value == pytest.approx(float(exact_value), abs=0.08)
+    assert qmc.source_group_integration == "qmc"
+
+
+def test_source_group_qmc_uses_exact_sum_for_dynamic_magnitudes():
+    options = {
+        "param_type": ParamType(parallax=False),
+        "source": _isochrone(selected=True),
+        "integration_samples": 64,
+        "seed": 2,
+    }
+    exact = _model(**options, source_group_integration="exact")
+    qmc = _model(**options, source_group_integration="qmc")
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+    magnitudes = {"Imag": 18.0, "Vmag": 20.0}
+
+    assert qmc.log_density(
+        theta, context=context, magnitudes=magnitudes
+    ) == pytest.approx(
+        float(exact.log_density(theta, context=context, magnitudes=magnitudes)),
+        rel=1.0e-6,
+    )
 
 
 def test_no_parallax_mass_proposal_preserves_the_physical_jacobian():

@@ -106,6 +106,24 @@ For difficult short-timescale or isochrone-conditioned no-parallax events,
 repeat representative evaluations with a larger value such as 2048 and check
 that posterior summaries are stable.
 
+For a fixed source selection, parallax-free distance marginalization can also
+integrate the discrete Flow source group with QMC instead of evaluating every
+group at every physical QMC point:
+
+```python
+galaxy = gapmoe.Model(
+    gapmoe.ParamType(parallax=False, distance="marginalize"),
+    ...,
+    integration_samples=1024,
+    source_group_integration="qmc",
+)
+```
+
+The group proposal is conditioned on each source-distance point and its
+importance probability is included in the weight. The default `"exact"`
+retains the explicit group sum. Supplying pointwise source magnitudes always
+uses the exact sum, even when the model selected `"qmc"`.
+
 ## Histogram Backend
 
 An existing event-local histogram uses the same complete `Model` API:

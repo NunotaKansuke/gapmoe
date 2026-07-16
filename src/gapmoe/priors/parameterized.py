@@ -37,6 +37,8 @@ class _IntegrationProposal:
 class _MassImportanceProposal(_IntegrationProposal):
     mass: Any
     log_q_mass: Any
+    source_group: Any
+    log_q_source_group: Any
 
 
 def _mass_proposal_geometry(proposal, theta_e, mu):
@@ -61,6 +63,7 @@ class _PhysicalDensityView:
     physical_priors: tuple[Any, ...] = ()
     proposal: _IntegrationProposal | None = None
     direction_phi: Any = None
+    source_group_qmc: bool = False
 
     @property
     def _prior(self):
@@ -147,12 +150,41 @@ class _PhysicalDensityView:
         )
         mu_n = mu * jnp.cos(self.proposal.phi)
         mu_e = mu * jnp.sin(self.proposal.phi)
-        logp = jax.vmap(self.log_density)(ml, dl, ds, mu_n, mu_e)
+        if self.source_group_qmc:
+            density = self._prior.density
+            logp = jax.vmap(density.log_density_source_group)(
+                ml,
+                dl,
+                ds,
+                mu_n,
+                mu_e,
+                self.proposal.source_group,
+            )
+            if (
+                self._prior.include_event_rate
+                and not getattr(density, "event_rate_included", False)
+            ):
+                logp = logp + self._event_rate(ml, dl, ds, mu)
+            logp = logp + jax.vmap(
+                lambda current_ml, current_dl, current_ds, current_mu_n, current_mu_e: _physical_prior_sum(
+                    self.physical_priors,
+                    ML=current_ml,
+                    DL=current_dl,
+                    DS=current_ds,
+                    mu_N=current_mu_n,
+                    mu_E=current_mu_e,
+                    mu=jnp.hypot(current_mu_n, current_mu_e),
+                )
+            )(ml, dl, ds, mu_n, mu_e)
+        else:
+            logp = jax.vmap(self.log_density)(ml, dl, ds, mu_n, mu_e)
         log_q = (
             self.proposal.log_q_ds
             + self.proposal.log_q_mass
             - jnp.log(2.0 * jnp.pi)
         )
+        if self.source_group_qmc:
+            log_q = log_q + self.proposal.log_q_source_group
         terms = logp + log_jacobian - log_q
         valid = (
             (theta_e > 0.0)
@@ -183,6 +215,7 @@ class ParameterizedGalaxyModel:
     param_type: Any
     integration_samples: int = 512
     direction_samples: int = 32
+    source_group_integration: str = "exact"
     seed: int = 0
     _physical_priors: list[Any] = field(default_factory=list, init=False, repr=False)
     _proposal: _IntegrationProposal | None = field(default=None, init=False, repr=False)
@@ -198,8 +231,24 @@ class ParameterizedGalaxyModel:
         ):
             if isinstance(value, bool) or int(value) != value or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.source_group_integration not in {"exact", "qmc"}:
+            raise ValueError(
+                "source_group_integration must be 'exact' or 'qmc'"
+            )
         if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
+        if self.source_group_integration == "qmc":
+            if not bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+                raise ValueError(
+                    "source_group_integration='qmc' is available only for "
+                    "parallax-free distance-marginalized parameterizations"
+                )
+            if not callable(
+                getattr(self.galaxy.density, "log_density_source_group", None)
+            ):
+                raise TypeError(
+                    "source_group_integration='qmc' requires the Flow backend"
+                )
         if (
             bool(getattr(self.param_type, "uses_theta_mu_physical", False))
             and _has_physical_sampler(self.galaxy.density)
@@ -258,6 +307,11 @@ class ParameterizedGalaxyModel:
             tuple(self._physical_priors),
             proposal,
             direction_phi,
+            source_group_qmc=(
+                self.source_group_integration == "qmc"
+                and magnitudes is None
+                and proposal is not None
+            ),
         )
 
     def _importance_proposal(self):
@@ -675,7 +729,7 @@ def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
     cdf = np.concatenate(([0.0], np.cumsum(segment_mass)))
     cdf /= cdf[-1]
 
-    points = _halton_points(samples, 5, seed)
+    points = _halton_points(samples, 6 if with_mass else 5, seed)
     ds = np.interp(points[:, 0], cdf, distance)
     q_ds = np.interp(ds, distance, source_density)
     common = {
@@ -724,10 +778,36 @@ def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
     )
     mass = np.exp(log_mass)
     q_mass = q_log_mass / mass
+    component_density = np.column_stack([
+        np.interp(
+            ds,
+            distance,
+            np.asarray(density.distance.source_by_component)[:, component],
+        )
+        for component in range(
+            np.asarray(density.distance.source_by_component).shape[1]
+        )
+    ])
+    from gapmoe.density.flow_backend import SOURCE_GROUP_MATRIX_NP
+
+    group_density = component_density @ SOURCE_GROUP_MATRIX_NP.T
+    group_probability = group_density / np.sum(
+        group_density, axis=1, keepdims=True
+    )
+    group_cdf = np.cumsum(group_probability, axis=1)
+    source_group = np.minimum(
+        np.sum(points[:, 5, None] > group_cdf, axis=1),
+        group_probability.shape[1] - 1,
+    )
+    q_source_group = group_probability[
+        np.arange(samples), source_group
+    ]
     return _MassImportanceProposal(
         **common,
         mass=jnp.asarray(mass),
         log_q_mass=jnp.asarray(np.log(q_mass)),
+        source_group=jnp.asarray(source_group),
+        log_q_source_group=jnp.asarray(np.log(q_source_group)),
     )
 
 

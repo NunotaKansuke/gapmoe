@@ -54,6 +54,28 @@ def test_distance_marginalization_builds_no_unused_mass_proposal():
     assert not hasattr(proposal, "mass")
 
 
+def test_source_group_qmc_rejects_unsupported_parameterization():
+    galaxy = SimpleNamespace(density=SimpleNamespace())
+
+    with pytest.raises(ValueError, match="parallax-free"):
+        ParameterizedGalaxyModel(
+            galaxy,
+            ParamType(parallax=True, distance="sample"),
+            source_group_integration="qmc",
+        )
+
+
+def test_source_group_integration_rejects_unknown_mode():
+    galaxy = SimpleNamespace(density=SimpleNamespace())
+
+    with pytest.raises(ValueError, match="must be 'exact' or 'qmc'"):
+        ParameterizedGalaxyModel(
+            galaxy,
+            ParamType(parallax=False),
+            source_group_integration="fft",
+        )
+
+
 # Physically rough but numerically stable parameter vectors
 _THETA_CIRC = jnp.array([
     2460000.0,   # t0 [day]

@@ -167,6 +167,7 @@ class Model:
         binary: int = 0,
         integration_samples: int = 512,
         direction_samples: int = 32,
+        source_group_integration: str = "exact",
         seed: int = 0,
     ) -> None:
         if source.table is None:
@@ -204,6 +205,7 @@ class Model:
             param_type,
             integration_samples=integration_samples,
             direction_samples=direction_samples,
+            source_group_integration=source_group_integration,
             seed=seed,
         )
 
@@ -218,6 +220,10 @@ class Model:
     @property
     def direction_samples(self) -> int:
         return self._model.direction_samples
+
+    @property
+    def source_group_integration(self) -> str:
+        return self._model.source_group_integration
 
     def prior(self, fn):
         """Add a JAX-compatible prior over physical or derived quantities."""

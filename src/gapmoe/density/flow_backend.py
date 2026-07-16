@@ -19,9 +19,10 @@ from gapmoe.flow_source_grid import FlowSourceDistance
 
 
 SOURCE_GROUP_BY_COMPONENT = np.asarray((0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4), dtype=int)
-SOURCE_GROUP_MATRIX = jnp.asarray(
+SOURCE_GROUP_MATRIX_NP = np.asarray(
     [[float(component_group == group) for component_group in SOURCE_GROUP_BY_COMPONENT] for group in range(5)]
 )
+SOURCE_GROUP_MATRIX = jnp.asarray(SOURCE_GROUP_MATRIX_NP)
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,12 @@ class FlowDensity:
     b_deg: float
     event_rate_included: bool = False
 
+    @property
+    def active_source_groups(self) -> tuple[int, ...]:
+        components = np.asarray(self.distance.source_by_component)
+        group_mass = np.sum(components, axis=0) @ SOURCE_GROUP_MATRIX_NP.T
+        return tuple(int(group) for group in np.flatnonzero(group_mass > 0.0))
+
     def with_source_evidence(self, evidence: Any) -> "FlowDensity":
         distance_pc = np.asarray(self.distance.distance_pc)
         weights = evidence.evidence_on(distance_pc, self.distance.source_by_component.shape[1])
@@ -246,6 +253,35 @@ class FlowDensity:
     def log_density(self, ml: Any, dl: Any, ds: Any, mu_n: Any, mu_e: Any):
         component_density = self.distance.source_component_values(ds) / self.distance.source_norm
         return self._combine_kernel(ml, dl, ds, mu_n, mu_e, component_density)
+
+    def log_density_source_group(
+        self,
+        ml: Any,
+        dl: Any,
+        ds: Any,
+        mu_n: Any,
+        mu_e: Any,
+        source_group: Any,
+    ):
+        """Return one source-group contribution to the physical density."""
+
+        component_density = (
+            self.distance.source_component_values(ds) / self.distance.source_norm
+        )
+        group_density = SOURCE_GROUP_MATRIX @ jnp.asarray(component_density)
+        condition = jnp.concatenate(
+            (
+                jnp.asarray((self.l_deg, self.b_deg, ds)),
+                jax.nn.one_hot(source_group, 5),
+            )
+        )
+        values = jnp.asarray((ml, dl, mu_e, mu_n))
+        weight = group_density[source_group]
+        return jnp.where(
+            weight > 0.0,
+            jnp.log(weight) + self.kernel.log_density(values, condition),
+            -jnp.inf,
+        )
 
     def log_cmd_joint_density(
         self,
@@ -303,16 +339,22 @@ class FlowDensity:
         return jnp.asarray((sample[0], sample[1], ds, sample[3], sample[2]))
 
     def _combine_kernel(self, ml: Any, dl: Any, ds: Any, mu_n: Any, mu_e: Any, component_density: Any):
-        group_density = SOURCE_GROUP_MATRIX @ jnp.asarray(component_density)
+        active_groups = jnp.asarray(self.active_source_groups)
+        group_density = (
+            SOURCE_GROUP_MATRIX @ jnp.asarray(component_density)
+        )[active_groups]
         conditions = jnp.column_stack(
             (
-                jnp.full(5, self.l_deg),
-                jnp.full(5, self.b_deg),
-                jnp.full(5, ds),
-                jnp.eye(5),
+                jnp.full(active_groups.shape, self.l_deg),
+                jnp.full(active_groups.shape, self.b_deg),
+                jnp.full(active_groups.shape, ds),
+                jax.nn.one_hot(active_groups, 5),
             )
         )
-        values = jnp.broadcast_to(jnp.asarray((ml, dl, mu_e, mu_n)), (5, 4))
+        values = jnp.broadcast_to(
+            jnp.asarray((ml, dl, mu_e, mu_n)),
+            (active_groups.shape[0], 4),
+        )
         kernel_logp = self.kernel.log_density(values, conditions)
         terms = jnp.where(group_density > 0.0, jnp.log(group_density) + kernel_logp, -jnp.inf)
         return logsumexp(terms)
