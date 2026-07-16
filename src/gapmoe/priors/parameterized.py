@@ -36,6 +36,7 @@ class _PhysicalDensityView:
     physical_priors: tuple[Any, ...] = ()
     proposal: _ImportanceProposal | None = None
     direction_phi: Any = None
+    source_radius: bool = False
 
     @property
     def _prior(self):
@@ -48,9 +49,17 @@ class _PhysicalDensityView:
     def log_density(self, ml, dl, ds, mu_n, mu_e):
         physical = (ml, dl, ds, mu_n, mu_e)
         if self.joint:
+            theta_star_mas = None
+            if self.source_radius:
+                if self.context is None or "thS" not in self.context:
+                    raise ValueError(
+                        "source_radius=True requires context['thS'] in mas"
+                    )
+                theta_star_mas = self.context["thS"]
             value = self.galaxy.log_joint_density(
                 physical,
                 magnitudes=self.magnitudes,
+                theta_star_mas=theta_star_mas,
                 context=self.context,
             )
         else:
@@ -160,6 +169,7 @@ class ParameterizedGalaxyModel:
     integration_samples: int = 256
     direction_samples: int = 32
     seed: int = 0
+    source_radius: bool = False
     _physical_priors: list[Any] = field(default_factory=list, init=False, repr=False)
     _proposal: _ImportanceProposal | None = field(default=None, init=False, repr=False)
     _compiled: dict[Any, Any] = field(default_factory=dict, init=False, repr=False)
@@ -176,6 +186,16 @@ class ParameterizedGalaxyModel:
                 raise ValueError(f"{name} must be a positive integer")
         if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
+        if not isinstance(self.source_radius, bool):
+            raise TypeError("source_radius must be bool")
+        table = self.galaxy.isochrone.table
+        if self.source_radius and (
+            table.log_radius_moment_by_component is None
+            or table.log_radius_square_moment_by_component is None
+        ):
+            raise ValueError(
+                "source_radius=True requires an isochrone table with radius moments"
+            )
         if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
             self._importance_proposal()
 
@@ -231,6 +251,7 @@ class ParameterizedGalaxyModel:
             tuple(self._physical_priors),
             proposal,
             direction_phi,
+            self.source_radius,
         )
 
     def _importance_proposal(self):
@@ -257,6 +278,11 @@ class ParameterizedGalaxyModel:
         )
 
     def log_density(self, theta, *, context=None, magnitudes=None):
+        if self.source_radius:
+            raise ValueError(
+                "source_radius=True represents a joint thetaS/photometry density; "
+                "use log_joint_density(..., magnitudes=...)"
+            )
         self._prepare_integration(magnitudes)
         evaluator = self._compiled_evaluator(
             joint=False,

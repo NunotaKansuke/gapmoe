@@ -156,6 +156,31 @@ Use `log_source_density(ds=..., magnitudes=...)` when that factor belongs in an
 analysis. `source_radius(ds=..., magnitudes=...)` provides the corresponding
 source-radius summary.
 
+The same isochrone radius information can participate in light-curve
+inference jointly with source distance. Enable it on the independently
+parameterized prior:
+
+```python
+light_curve_prior = prior.parameterize(
+    gapmoe.ParamType(parallax=False, distance="marginalize"),
+    integration_samples=512,
+    source_radius=True,
+)
+
+logp = light_curve_prior.log_joint_density(
+    theta,
+    context={"thS": theta_s_mas},
+    magnitudes={"Imag": i_s, "Vmag": v_s},
+)
+```
+
+This evaluates `p(log(thetaS), magnitudes, event)` with `DS` inside the same
+distance integral. Within each CMD bin and source component, the stored first
+two `log(R/Rsun)` moments define a log-normal radius approximation. Component
+weights remain inside the Flow or histogram event-density sum. For diagnostics,
+`prior.log_theta_star_density(theta_star_mas=..., ds=..., magnitudes=...)`
+returns `log p(log(thetaS) | DS, magnitudes)` directly.
+
 ## Histogram backend
 
 The legacy event-local histogram workflow is also available through the same
