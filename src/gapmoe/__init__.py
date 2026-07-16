@@ -1,12 +1,26 @@
 """gapmoe public API."""
 
-__all__ = ["Model", "ParamType", "SourcePopulation", "AgeMetallicityPoint", "calc_vEarth"]
+__all__ = [
+    "Flow",
+    "Histogram",
+    "Isochrone",
+    "Model",
+    "ParamType",
+    "SourcePopulation",
+    "AgeMetallicityPoint",
+    "calc_vEarth",
+]
 
 
 def __getattr__(name):
-    if name == "Model":
-        from .priors.high_level import Model
-        return Model
+    if name in {"Flow", "Histogram", "Isochrone", "Model"}:
+        from .model import Flow, Histogram, Isochrone, Model
+        return {
+            "Flow": Flow,
+            "Histogram": Histogram,
+            "Isochrone": Isochrone,
+            "Model": Model,
+        }[name]
     if name == "ParamType":
         from .param_types import ParamType
         return ParamType

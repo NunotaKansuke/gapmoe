@@ -202,10 +202,14 @@ class GalaxyModel:
         if self.isochrone.table is None:
             raise ValueError("isochrone must be built before constructing GalaxyModel")
 
+        extinction = {
+            band: float(self.extinction_at_rc.get(band, 0.0))
+            for band in self.isochrone.coordinates.bands
+        }
         dust = ExponentialDustOffsets(
             l_deg=self.l_deg,
             b_deg=self.b_deg,
-            extinction_at_reference=self.extinction_at_rc,
+            extinction_at_reference=extinction,
             dm_reference=self.dm_rc,
             dust_scale_height_pc=self.dust_scale_height_pc,
         )
@@ -270,26 +274,6 @@ class GalaxyModel:
             color=color,
             theta_star_mas=theta_star_mas,
             context=context,
-        )
-
-    def parameterize(
-        self,
-        param_type: Any,
-        *,
-        integration_samples: int = 512,
-        direction_samples: int = 32,
-        seed: int = 0,
-    ):
-        """Return this physical density expressed in light-curve parameters."""
-
-        from .parameterized import ParameterizedGalaxyModel
-
-        return ParameterizedGalaxyModel(
-            self,
-            param_type,
-            integration_samples=integration_samples,
-            direction_samples=direction_samples,
-            seed=seed,
         )
 
     def log_source_density(self, *, ds: Any, magnitudes: Mapping[str, Any], context: Context = None):
@@ -437,12 +421,11 @@ class GalaxyModel:
         return self._conditional_prior.density.distance.source_by_component * photometric
 
 
-class Model:
-    """High-level gapmoe interface for one Galactic line of sight.
+class Workspace:
+    """Internal workspace for preparing event-local histogram artifacts.
 
-    The public workflow is ``set(...)``, ``prepare()``, ``isochrone(...)``,
-    and ``galactic_model(...)``.  Pre-gapmoe artifacts and dust conversion are
-    intentionally kept behind this interface.
+    Inference uses :class:`gapmoe.Model`; this mutable object only owns the
+    separate precomputation and cache workflow.
     """
 
     _SETTINGS = {
@@ -483,7 +466,7 @@ class Model:
             self._runner = self._new_runner()
         return self._runner
 
-    def set(self, **settings: Any) -> "Model":
+    def set(self, **settings: Any) -> "Workspace":
         """Set sightline and extinction values, invalidating prepared tables."""
 
         unknown = set(settings) - self._SETTINGS
@@ -523,7 +506,7 @@ class Model:
             self._prepared = None
         return self
 
-    def set_flow(self, *, release: str = "default") -> "Model":
+    def set_flow(self, *, release: str = "rate-included-v1") -> "Workspace":
         """Select a bundled trained flow release for the current sightline."""
 
         if "l" not in self._settings or "b" not in self._settings:
@@ -537,7 +520,7 @@ class Model:
         self._flow_package = None
         return self
 
-    def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Model":
+    def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Workspace":
         """Create or reuse raw pre-gapmoe artifacts for the configured sightline."""
 
         if self._flow_release is not None:
@@ -584,7 +567,7 @@ class Model:
         self._write_settings()
         return self
 
-    def resume(self, directory: str | Path) -> "Model":
+    def resume(self, directory: str | Path) -> "Workspace":
         """Open an existing prepared event directory without rerunning genulens."""
 
         self.directory = Path(directory).expanduser().resolve()

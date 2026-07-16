@@ -4,8 +4,7 @@ Each param_type converts a light-curve parameter vector *theta* into physical
 parameters. The first five values are ``(ML, DL, DS, mu_N, mu_E)`` expected by
 the Galactic density model; orbital-motion param_types append derived orbital
 elements after those five values. Param_types also provide the log-Jacobian of
-the density-coordinate transformation for use with
-:meth:`~gapmoe.priors.high_level.GalaxyModel.parameterize`.
+the density-coordinate transformation owned by :class:`gapmoe.Model`.
 
 **Choosing a param_type**
 
@@ -13,7 +12,7 @@ The public selector is ``ParamType``. It keeps the light-curve model
 choice in one small object and hides the concrete mapping class names::
 
     p = ParamType(lens="binary", parallax=True, orbital_motion="static")
-    prior = galaxy.parameterize(p)
+    galaxy = gapmoe.Model(p, ...)
 
 ``parallax=True, orbital_motion="static"`` expects
 ``(t0, tE, u0, rho, piEN, piEE, DS)`` by default. Use
@@ -29,9 +28,6 @@ Flow-backed no-parallax models use fixed importance points for hidden
 ``DL``, ``DS``, and proper-motion direction. Histogram backends continue to
 use their native precomputed projections when source photometry and additional
 hidden-physical priors do not require the uncollapsed integrand.
-
-The lower-level concrete classes remain available for advanced use and for
-backward compatibility.
 
 **Context**
 
@@ -57,7 +53,7 @@ protocol to add your own::
         def log_abs_det_jacobian(self, theta, context=None):
             return lndet
 
-    prior = galaxy.parameterize(MyParam())
+    galaxy = gapmoe.Model(MyParam(), ...)
 """
 
 __all__ = [

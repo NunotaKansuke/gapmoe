@@ -19,10 +19,8 @@ from gapmoe.source_selection import (
     ExponentialDustOffsets,
     IsochroneSampleGrid,
     MagnitudeCut,
-    MagnitudeMeasurement,
     ConditionedSourceDensity,
     SourceEvidenceGrid,
-    SourcePhotometry,
     SourceSelection,
     ExponentialDustModel,
     angular_radius_microarcsec,
@@ -108,28 +106,6 @@ def test_isochrone_sample_grid_supports_magnitude_and_color_cuts() -> None:
     assert angular_radius_microarcsec(1.0, distance_pc) == pytest.approx(0.5813084076202696)
 
 
-def test_photometry_likelihood_produces_a_theta_star_posterior() -> None:
-    samples = IsochroneSampleGrid(
-        absolute_magnitudes={"Imag": np.asarray([3.0, 5.0, 8.0])},
-        radius_rsun=np.asarray([8.0, 1.0, 0.3]),
-        weights=np.asarray([1.0, 2.0, 1.0]),
-    )
-    distance_pc = 8_000.0
-    distance_modulus = 5.0 * np.log10(distance_pc) - 5.0
-    photometry = SourcePhotometry(magnitudes=(MagnitudeMeasurement("Imag", 5.0 + distance_modulus, 0.03),))
-
-    evidence = samples.evidence(photometry, distance_pc=distance_pc, magnitude_offsets={"Imag": distance_modulus})
-    theta, posterior = samples.theta_posterior(
-        photometry,
-        distance_pc=distance_pc,
-        magnitude_offsets={"Imag": distance_modulus},
-    )
-
-    assert evidence > 0.0
-    assert posterior[1] > 0.999
-    assert np.sum(theta * posterior) == pytest.approx(angular_radius_microarcsec(1.0, distance_pc))
-
-
 def test_cmd_prior_table_evaluates_apparent_magnitude_color_and_flux_density() -> None:
     samples = IsochroneSampleGrid(
         absolute_magnitudes={
@@ -175,15 +151,6 @@ def test_cmd_prior_table_evaluates_apparent_magnitude_color_and_flux_density() -
         component_indices=[8],
     )
     assert evidence.evidence_by_component[0, 0] == pytest.approx(0.0625)
-
-
-def test_apparent_source_photometry_requires_distance_and_extinction_offsets() -> None:
-    model = GenulensSourceModel(
-        source_data=SourcePhotometry(magnitudes=(MagnitudeMeasurement("Imag", 19.0, 0.03),)),
-    )
-
-    with pytest.raises(ValueError, match="offset_provider"):
-        model.build_evidence_grid([8_000.0])
 
 
 def test_genulens_source_model_selects_default_table_from_bands() -> None:

@@ -5,9 +5,9 @@ import json
 import numpy as np
 import pytest
 
-from gapmoe import AgeMetallicityPoint, Model, ParamType, SourcePopulation
+from gapmoe import AgeMetallicityPoint, ParamType, SourcePopulation
 from gapmoe.pre_runner import PreRunResult
-from gapmoe.priors.high_level import IsochroneModel
+from gapmoe.priors.high_level import IsochroneModel, Workspace
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable, GenulensSourceModel
 
 
@@ -19,7 +19,7 @@ def fake_genulens_root(tmp_path):
 
 
 def test_model_set_requires_known_settings_and_only_invalidates_for_sightline_changes(fake_genulens_root):
-    model = Model(genulens_root=fake_genulens_root)
+    model = Workspace(genulens_root=fake_genulens_root)
     model._prepared = object()
 
     assert model.set(l=1.0, b=-3.9, ai_rc=1.2, evi_rc=0.7) is model
@@ -97,7 +97,7 @@ def test_public_api_exposes_only_the_parameterization_selector():
 
 
 def test_prepare_requires_a_sightline(tmp_path, fake_genulens_root):
-    model = Model(genulens_root=fake_genulens_root)
+    model = Workspace(genulens_root=fake_genulens_root)
 
     with pytest.raises(ValueError, match="set l and b"):
         model.prepare(tmp_path / "event")
@@ -105,7 +105,7 @@ def test_prepare_requires_a_sightline(tmp_path, fake_genulens_root):
 
 def test_prepare_uses_the_requested_directory_and_persists_settings(tmp_path, monkeypatch, fake_genulens_root):
     directory = tmp_path / "event-001"
-    model = Model(genulens_root=fake_genulens_root)
+    model = Workspace(genulens_root=fake_genulens_root)
     model.set(l=1.0, b=-3.9, extinction={"Imag": 1.2})
 
     def fake_run(**kwargs):
@@ -158,7 +158,7 @@ def test_resume_reopens_an_existing_directory_from_metadata(tmp_path, fake_genul
         json.dumps({"settings": {"l": 1.0, "b": -3.9, "dm_rc": 14.4}, "prepare_options": {}})
     )
 
-    model = Model(genulens_root=fake_genulens_root).resume(directory)
+    model = Workspace(genulens_root=fake_genulens_root).resume(directory)
 
     assert model._prepared is not None
     assert model._settings["l"] == 1.0
@@ -167,7 +167,7 @@ def test_resume_reopens_an_existing_directory_from_metadata(tmp_path, fake_genul
 
 def test_resume_requires_complete_artifacts(tmp_path, fake_genulens_root):
     with pytest.raises(FileNotFoundError, match="no complete"):
-        Model(genulens_root=fake_genulens_root).resume(tmp_path / "missing")
+        Workspace(genulens_root=fake_genulens_root).resume(tmp_path / "missing")
 
 
 def test_prepare_rejects_a_cached_directory_at_a_different_sightline(tmp_path, fake_genulens_root):
@@ -183,13 +183,13 @@ def test_prepare_rejects_a_cached_directory_at_a_different_sightline(tmp_path, f
     )
     (directory / "gapmoe.json").write_text(json.dumps({"settings": {"l": 1.0, "b": -3.9}}))
 
-    model = Model(genulens_root=fake_genulens_root).set(l=2.0, b=-3.9)
+    model = Workspace(genulens_root=fake_genulens_root).set(l=2.0, b=-3.9)
     with pytest.raises(ValueError, match="sightline disagrees"):
         model.prepare(directory)
 
 
 def test_set_flow_checks_the_release_sightline_coverage(fake_genulens_root):
-    model = Model(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9)
+    model = Workspace(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9)
 
     assert model.set_flow() is model
     with pytest.raises(ValueError, match="covers"):
@@ -198,23 +198,23 @@ def test_set_flow_checks_the_release_sightline_coverage(fake_genulens_root):
 
 def test_set_flow_requires_sightline_and_known_release(fake_genulens_root):
     with pytest.raises(ValueError, match="set l and b"):
-        Model(genulens_root=fake_genulens_root).set_flow()
+        Workspace(genulens_root=fake_genulens_root).set_flow()
     with pytest.raises(ValueError, match="unknown flow release"):
-        Model(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9).set_flow(release="missing")
+        Workspace(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9).set_flow(release="missing")
 
 
 def test_flow_does_not_require_genulens_until_prepare_is_requested():
-    model = Model(backend="cli").set(l=1.0, b=-3.9).set_flow()
+    model = Workspace(backend="cli").set(l=1.0, b=-3.9).set_flow()
 
     assert model._runner is None
 
 
 def test_remnant_and_binary_are_forwarded_and_must_match_a_flow_release(tmp_path, monkeypatch, fake_genulens_root):
-    model = Model(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9, remnant=1, binary=1)
+    model = Workspace(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9, remnant=1, binary=1)
     with pytest.raises(ValueError, match="requires REMNANT=0"):
         model.set_flow()
 
-    model = Model(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9, remnant=0, binary=0)
+    model = Workspace(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9, remnant=0, binary=0)
     captured = {}
     monkeypatch.setattr(model._runner, "run", lambda **kwargs: captured.update(kwargs))
     model.prepare(tmp_path / "event")
@@ -245,10 +245,10 @@ def test_isochrone_reuses_the_cmd_table_saved_in_a_resumed_directory(tmp_path, f
     table.save_npz(directory / "cmd_prior.npz")
     chart = IsochroneModel(reference_band="I", color_bands=("V", "I"))
     (directory / "isochrone.json").write_text(
-        json.dumps(Model._isochrone_metadata(chart, 0.75), sort_keys=True)
+        json.dumps(Workspace._isochrone_metadata(chart, 0.75), sort_keys=True)
     )
 
-    restored = Model(genulens_root=fake_genulens_root).resume(directory).isochrone(
+    restored = Workspace(genulens_root=fake_genulens_root).resume(directory).isochrone(
         reference_band="I", color_bands=("V", "I")
     )
 

@@ -1,217 +1,202 @@
 # gapmoe
 
-gapmoe provides Galactic priors for microlensing event modeling. The public
-interface is deliberately small: configure a sightline with `Model`, build an
-isochrone source model, and obtain a five-dimensional event prior.
+gapmoe provides sampler-independent Galactic priors for microlensing event
+modeling. A `Model` is complete at construction: it owns the physical Galactic
+density, light-curve parameterization, Jacobian, and hidden-variable
+integration.
 
-The canonical parameter order is:
-
-```text
-ML, DL, DS, mu_N, mu_E
-```
-
-Mass is in solar masses, distances are in kpc, and proper motions are in
-mas/yr.
-
-## Flow release
-
-The bundled `default` Flow release needs no local genulens checkout:
+## Flow Model
 
 ```python
 import gapmoe
 
-model = gapmoe.Model()
-model.set(l=1.0, b=-3.9, extinction={"Imag": 1.2, "Vmag": 2.0})
-model.set_flow()
-
-isochrone = model.isochrone(
-    reference_band="Imag",
-    color_bands=("Vmag", "Imag"),
-    magnitude_range=(15.0, 21.0),
-    color_range=(0.5, 3.0),
-)
-prior = model.galactic_model(isochrone)
-
-logp = prior.log_density(theta)
-logp_given_photometry = prior.log_density(
-    theta, magnitudes={"Imag": i_s, "Vmag": v_s}
-)
-sample = prior.sample(key)
-sample_given_photometry = prior.sample(
-    key, magnitudes={"Imag": i_s, "Vmag": v_s}
-)
-```
-
-To express the same physical density in microlensing light-curve parameters,
-attach an independent parameterization:
-
-```python
-params = gapmoe.ParamType(
+param_type = gapmoe.ParamType(
     lens="binary",
     parallax=True,
     orbital_motion="static",
     distance="marginalize",
 )
-light_curve_prior = prior.parameterize(params)
 
-context = {"thS": 0.005, "vEarth": (v_north, v_east)}
-logp = light_curve_prior.log_density(theta, context=context)
-```
-
-Priors that depend on hidden physical integration variables belong inside the
-parameterized Galactic prior:
-
-```python
-import jax.numpy as jnp
-
-@light_curve_prior.prior
-def physical_bounds(ML, DL, DS, **_):
-    valid = (ML > 0.01) & (DL > 0.0) & (DL < DS)
-    return jnp.where(valid, 0.0, -jnp.inf)
-```
-
-These callables are evaluated inside distance marginalization and must be
-JAX-compatible for Flow-backed models.
-
-The parameterized object owns its physical transform, Jacobian, and hidden
-distance integration. It remains independent of any sampler and exposes the
-small `names`/`log_density` protocol expected by downstream inference tools.
-
-Without parallax, Flow-backed models use deterministic importance integration:
-
-```python
-prior = galaxy.parameterize(
-    gapmoe.ParamType(parallax=False, distance="marginalize"),
-    integration_samples=512,
-    seed=0,
-)
-```
-
-The proposal draws `DS` from the packaged source-distance measure, uses a
-full-support `DL/DS` proposal fitted from fast Flow samples, and samples the
-proper-motion direction uniformly. Fixed Halton points are reused at every
-evaluation, so the MCMC target is deterministic. With `distance="sample"`,
-`DL` and `DS` are explicit parameters and only the proper-motion direction is
-integrated; `direction_samples=32` controls that quadrature.
-
-Circular and Kepler orbital-motion parameterizations use lcbinint's canonical
-names `g1`, `g2`, `g3`, `lom_szs`, and `lom_ar` directly.
-
-The release covers `-5 <= l <= 5` and `-6 <= b <= -2` degrees with
-`REMNANT=0` and `BINARY=0`. It models
-`p(ML, DL, mu_E, mu_N | DS, source_group, l, b)`. The packaged source-distance
-measure matches the unselected genulens proposal used to train this release:
-`nMS * sqrt(DS / 8000) * 1e-3` times the integrated `DL**2`-weighted total
-lens-number-density column to `DS` (the default `gammaDs=0.5`). The Flow
-supplies lens parameters conditional on that source and already retains the
-`DL**2` lens-area factor; inference applies only `thetaE * mu_rel`. CMD
-selection and supplied source photometry are applied at inference, so neither
-requires retraining.
-
-`sample_kernel(key, ds=..., source_group=...)` is the fixed-`DS`, fixed-group
-diagnostic sampler. Source-group indices are thin, thick, bulge, NSD, and halo
-in that order (0 through 4). `sample()` draws a source distance/group first;
-with the default event-rate option it uses importance resampling. This
-partially rate-removed release is intended for prior evaluation and modest diagnostic
-sampling; do not use `sample()` as the bulk proposal for high-precision,
-rate-weighted or exponentially tilted Monte Carlo.
-
-For high-precision population Monte Carlo, use the separately validated
-rate-included release:
-
-```python
-model.set_flow(release="rate-included-v1")
-prior = model.galactic_model(isochrone)
-sample = prior.sample(key)
-```
-
-Its source-group conditional experts were trained directly on raw genulens
-`wtj`, and its component-resolved source grid is the matching event-rate
-`(DS, component)` marginal. The NSD and halo use the balanced rare-group
-expert; the three major groups use the full-grid raw-`wtj` kernel. The complete
-package is released against independent genulens holdouts:
-the joint five-dimensional state, derived `DL/DS`, `mu_rel`, `theta_E`, and
-`t_E`, source-group fractions, and rank-correlation structure all pass the
-limits recorded in its manifest. Consequently `log_density()` and `sample()`
-do not apply a second rate factor or importance correction.
-`include_event_rate=False` is rejected for this release because the factor
-cannot be removed after training. The coverage and `REMNANT=0`, `BINARY=0`
-restrictions are the same as `default`.
-
-The executed
-[`flow_galactic_model.ipynb`](example/flow_galactic_model.ipynb) example covers
-initialization and density evaluation, `emcee` sampling versus matching
-weighted genulens rows, and integration with source magnitude/color data.
-
-`log_density(..., magnitudes=...)` conditions the event prior on the supplied
-photometry, but does not include the photometry as an additional source prior.
-Use `log_source_density(ds=..., magnitudes=...)` when that factor belongs in an
-analysis. `source_radius(ds=..., magnitudes=...)` provides the corresponding
-source-radius summary.
-
-The same isochrone radius information can participate in downstream
-light-curve inference jointly with source distance. The parameterized prior
-exposes a small provider protocol for paired-QMC consumers; users do not need
-to configure a separate thetaS prior on the gapmoe object.
-
-Within each CMD bin and source component, the stored first two
-`log(R/Rsun)` moments define a log-normal radius approximation. Paired-QMC
-consumers keep component weights inside the Flow or histogram event-density
-sum instead of forming a Cartesian thetaS-by-distance grid. For diagnostics,
-`prior.log_theta_star_density(theta_star_mas=..., ds=..., magnitudes=...)`
-returns `log p(log(thetaS) | DS, magnitudes)` directly.
-
-## Histogram backend
-
-The legacy event-local histogram workflow is also available through the same
-public API. It requires the installed `genulens` package:
-
-```python
-import gapmoe
-
-model = gapmoe.Model()
-model.set(
-    l=1.0,
-    b=-3.9,
-    extinction={"Imag": 1.2, "Vmag": 2.0},
-    dm_rc=14.45,
-)
-model.prepare("runs/event-001")
-
-isochrone = model.isochrone(
+source = gapmoe.Isochrone(
     reference_band="Imag",
     color_bands=("Vmag", "Imag"),
     magnitude_range=(15.0, 21.0),
     color_range=(0.5, 3.0),
 )
-prior = model.galactic_model(isochrone)
-```
 
-`Model().resume("runs/event-001")` reuses prepared artifacts. A source
-checkout is only needed while developing genulens' CLI helpers:
-
-```bash
-make -C ../genulens pre_gapmoe
-```
-
-## Source populations
-
-The default isochrone population reproduces genulens' broken-power-law IMF and
-component-dependent age-metallicity mixtures. Override only the desired part:
-
-```python
-from gapmoe import AgeMetallicityPoint, SourcePopulation
-
-population = SourcePopulation(
-    imf={"alpha2": -1.3},
-    age_metallicity_by_component={
-        8: (AgeMetallicityPoint(log_age=9.9, metallicity_mh=0.1, weight=1.0),),
-    },
+galaxy = gapmoe.Model(
+    param_type,
+    l=1.0,
+    b=-3.9,
+    extinction={"Imag": 1.2, "Vmag": 2.0},
+    source=source,
+    backend=gapmoe.Flow("rate-included-v1"),
+    integration_samples=512,
 )
 ```
 
-For V/I work, `model.set(ai_rc=..., evi_rc=...)` is equivalent to supplying
-the matching per-band RC extinctions. Use `extinction` for other bands.
+`magnitude_range` and `color_range` are hard source selections. gapmoe
+integrates the isochrone population inside those apparent-photometry bounds at
+each source distance and component, then uses that evidence to reweight the
+source-distance prior. Downstream packages receive the already-selected model;
+they do not need a separate source-photometry API. The registration call below
+belongs to lcbinint, not to gapmoe; ``lc_model`` denotes the downstream
+light-curve model.
+
+```python
+lc_model.galactic_prior(galaxy)
+```
+
+Distance modulus is always included in this selection, including when
+`extinction` is omitted or all extinctions are zero.
+
+The model is not tied to lcbinint or to a particular sampler:
+
+```python
+context = {"thS": 0.005, "vEarth": (v_north, v_east)}
+
+logp = galaxy.log_density(theta, context=context)
+values = galaxy.log_density_batch(theta_batch, context=context)
+physical = galaxy.to_physical(theta, context=context)
+draw = galaxy.sample_physical(theta, context=context, rng=rng)
+```
+
+Priors involving hidden physical variables are evaluated inside the same
+distance integral:
+
+```python
+import jax.numpy as jnp
+
+@galaxy.prior
+def physical_bounds(ML, DL, DS, **_):
+    valid = (ML > 0.01) & (DL > 0.0) & (DL < DS)
+    return jnp.where(valid, 0.0, -jnp.inf)
+```
+
+## Physical Model
+
+The lower-level physical density remains available without changing the main
+inference API. Its canonical coordinates are
+`(ML, DL, DS, mu_N, mu_E)`, with mass in solar masses, distances in kpc, and
+proper motions in mas/yr.
+
+```python
+logp = galaxy.physical.log_density((ML, DL, DS, mu_N, mu_E))
+sample = galaxy.physical.sample(key, magnitudes={"Imag": i_s, "Vmag": v_s})
+```
+
+## Parameterizations
+
+`ParamType` determines both the visible parameter names and which physical
+variables are integrated internally.
+
+- `parallax=True, distance="sample"`: `DS` is explicit.
+- `parallax=True, distance="marginalize"`: `DS` is integrated.
+- `parallax=False, distance="sample"`: `DL` and `DS` are explicit; the
+  proper-motion direction is integrated.
+- `parallax=False, distance="marginalize"`: `DL`, `DS`, and the
+  proper-motion direction are integrated.
+- `orbital_motion="circular"` and `"kepler"` enable binary-lens orbital
+  mappings.
+
+Flow-backed hidden-variable integration uses deterministic fixed QMC points.
+`integration_samples=512` is the default. `direction_samples=32` controls the
+direction-only quadrature used by sampled-distance no-parallax models.
+For difficult short-timescale or isochrone-conditioned no-parallax events,
+repeat representative evaluations with a larger value such as 2048 and check
+that posterior summaries are stable.
+
+## Histogram Backend
+
+An existing event-local histogram uses the same complete `Model` API:
+
+```python
+galaxy = gapmoe.Model(
+    param_type,
+    l=1.0,
+    b=-3.9,
+    extinction={"Imag": 1.2, "Vmag": 2.0},
+    source=source,
+    backend=gapmoe.Histogram.open("runs/event-001"),
+)
+```
+
+Histogram generation is a precomputation concern, separate from the inference
+model itself. An ordinary no-parallax Histogram model uses its deterministic
+precomputed `DL x DS` quadrature. Dynamic source-magnitude/isochrone
+conditioning and hidden physical priors would require a different importance
+proposal and are intentionally unsupported for a parallax-free Histogram
+model. Use the Flow backend or sample distances explicitly for those cases.
+
+## Supported Inference Boundary
+
+- Flow supports sampled and marginalized distances, parallax-free hidden
+  physical integration, dynamic source magnitudes, isochrone thetaS, and
+  physical priors.
+- Histogram supports its direct parameter transforms and deterministic
+  distance quadrature.
+- Histogram does not fall back to a generic hidden-physical QMC proposal for
+  dynamic parallax-free conditioning. Such a request raises an explanatory
+  error instead of returning a poorly controlled approximation.
+- `sample_physical()` draws marginalized quantities conditionally from the
+  same density or finite-QMC approximation used by `log_density()`.
+
+## Downstream Integration
+
+Downstream inference packages can consume `Model` through a small protocol:
+`names`, `log_density()`, `is_valid()`, and `sample_physical()`. gapmoe does not
+import lcbinint.
+
+Supplying source magnitudes to `log_density()` changes the Galactic model
+conditionally:
+
+```text
+p(physical | source magnitudes)
+```
+
+The marginal CMD density is divided out, so this does not define an additional
+prior on a fitted, sampled, or marginalized source flux. `log_joint_density()`
+remains a separate low-level operation for analyses that explicitly want the
+joint CMD density.
+
+The following examples use lcbinint integration hooks. They are not methods on
+``gapmoe.Model`` itself; ``lc_model`` is the downstream light-curve model.
+
+```python
+lc_model.galactic_prior(galaxy)
+```
+
+For joint isochrone, source-flux, and distance integration, use the built
+source model owned by `galaxy`:
+
+```python
+@lc_model.theta_star(isochrone=galaxy.isochrone)
+def source_magnitudes(fluxes):
+    return {
+        "Imag": flux_to_mag(fluxes["I"]["Fs"]),
+        "Vmag": flux_to_mag(fluxes["V"]["Fs"]),
+    }
+```
+
+## Source Populations
+
+The default isochrone population reproduces genulens' broken-power-law IMF and
+component-dependent age-metallicity mixtures. It can be customized with
+`SourcePopulation` and `AgeMetallicityPoint`.
+
+## Migration from the builder API
+
+This branch intentionally replaces the mutable
+``Workspace().set(...).set_flow().galactic_model(...)`` inference workflow.
+Construct ``gapmoe.Model(param_type, ..., backend=...)`` directly instead.
+``Workspace`` remains internal to histogram precomputation and cache handling.
+
+``GalaxyModel.parameterize(...)`` was removed because the parameterization is
+now supplied when the complete ``gapmoe.Model`` is constructed. The former
+``MagnitudeMeasurement``, ``ColorMeasurement``, and ``SourcePhotometry``
+wrappers were also removed. Pass a band-to-magnitude mapping through
+``Model.log_density(..., magnitudes=...)`` for conditional photometry, or use
+``log_joint_density`` when the marginal CMD density belongs in the target.
 
 ## Install
 
@@ -230,6 +215,9 @@ pytest -q
 
 - `gapmoe.Model`
 - `gapmoe.ParamType`
+- `gapmoe.Flow`
+- `gapmoe.Histogram`
+- `gapmoe.Isochrone`
 - `gapmoe.SourcePopulation`
 - `gapmoe.AgeMetallicityPoint`
 - `gapmoe.calc_vEarth`

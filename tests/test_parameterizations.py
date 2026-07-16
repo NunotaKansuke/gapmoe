@@ -19,10 +19,40 @@ from gapmoe.param_types import (
 )
 from gapmoe.priors.galactic import _ParameterizedNumpyEngine
 from gapmoe.priors.galactic_jax import _ParameterizedJaxEngine
+from gapmoe.priors.parameterized import ParameterizedGalaxyModel
 
 
 # Representative context: values at event peak
 _CTX = {"thS": 0.5, "vEarth": (28.0, -3.0)}
+
+
+def test_parallax_free_backend_without_physical_sampler_rejects_dynamic_qmc():
+    galaxy = SimpleNamespace(density=SimpleNamespace())
+    model = ParameterizedGalaxyModel(galaxy, ParamType(parallax=False))
+
+    assert model._proposal is None
+    with pytest.raises(RuntimeError, match="Use the Flow backend"):
+        model._importance_proposal()
+
+
+def test_distance_marginalization_builds_no_unused_mass_proposal():
+    distance = SimpleNamespace(
+        distance_pc=np.asarray((1000.0, 2000.0, 3000.0)),
+        source_by_component=np.ones((3, 1)),
+    )
+    galaxy = SimpleNamespace(density=SimpleNamespace(distance=distance))
+    model = ParameterizedGalaxyModel(
+        galaxy,
+        ParamType(parallax=True, distance="marginalize"),
+        integration_samples=8,
+    )
+
+    proposal = model._importance_proposal()
+
+    assert proposal.ds.shape == (8,)
+    assert proposal.theta_u.shape == (8,)
+    assert not hasattr(proposal, "mass")
+
 
 # Physically rough but numerically stable parameter vectors
 _THETA_CIRC = jnp.array([

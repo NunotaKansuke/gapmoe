@@ -19,14 +19,37 @@ from .galactic_jax import _ParameterizedJaxEngine
 _KAPPA = 8.1429
 
 
+def _has_physical_sampler(density):
+    return callable(getattr(density, "sample_source_group", None)) and callable(
+        getattr(density, "_sample_kernel", None)
+    )
+
+
 @dataclass(frozen=True)
-class _ImportanceProposal:
+class _IntegrationProposal:
     ds: Any
-    x: Any
     phi: Any
-    log_q: Any
     log_q_ds: Any
     theta_u: Any
+
+
+@dataclass(frozen=True)
+class _MassImportanceProposal(_IntegrationProposal):
+    mass: Any
+    log_q_mass: Any
+
+
+def _mass_proposal_geometry(proposal, theta_e, mu):
+    ds = proposal.ds
+    ml = proposal.mass
+    x = _KAPPA * ml / (_KAPPA * ml + theta_e**2 * ds)
+    dl = x * ds
+    log_jacobian = (
+        jnp.log(2.0 * x * ds * (1.0 - x))
+        + jnp.log(jnp.abs(mu))
+        - jnp.log(jnp.abs(theta_e))
+    )
+    return ml, dl, ds, log_jacobian
 
 
 @dataclass(frozen=True)
@@ -36,7 +59,7 @@ class _PhysicalDensityView:
     joint: bool = False
     context: Mapping[str, Any] | None = None
     physical_priors: tuple[Any, ...] = ()
-    proposal: _ImportanceProposal | None = None
+    proposal: _IntegrationProposal | None = None
     direction_phi: Any = None
 
     @property
@@ -117,21 +140,20 @@ class _PhysicalDensityView:
         return terms, (mu_n, mu_e)
 
     def theta_mu_log_terms(self, theta_e, mu):
-        if self.proposal is None:
-            raise RuntimeError("distance importance proposal is unavailable")
-        ds = self.proposal.ds
-        dl = self.proposal.x * ds
-        pi_rel = 1.0 / dl - 1.0 / ds
-        ml = theta_e**2 / (_KAPPA * pi_rel)
+        if not isinstance(self.proposal, _MassImportanceProposal):
+            raise RuntimeError("mass importance proposal is unavailable")
+        ml, dl, ds, log_jacobian = _mass_proposal_geometry(
+            self.proposal, theta_e, mu
+        )
         mu_n = mu * jnp.cos(self.proposal.phi)
         mu_e = mu * jnp.sin(self.proposal.phi)
         logp = jax.vmap(self.log_density)(ml, dl, ds, mu_n, mu_e)
-        log_jacobian = (
-            jnp.log(2.0 * jnp.abs(theta_e) / (_KAPPA * pi_rel))
-            + jnp.log(ds)
-            + jnp.log(jnp.abs(mu))
+        log_q = (
+            self.proposal.log_q_ds
+            + self.proposal.log_q_mass
+            - jnp.log(2.0 * jnp.pi)
         )
-        terms = logp + log_jacobian - self.proposal.log_q
+        terms = logp + log_jacobian - log_q
         valid = (
             (theta_e > 0.0)
             & (mu > 0.0)
@@ -163,7 +185,7 @@ class ParameterizedGalaxyModel:
     direction_samples: int = 32
     seed: int = 0
     _physical_priors: list[Any] = field(default_factory=list, init=False, repr=False)
-    _proposal: _ImportanceProposal | None = field(default=None, init=False, repr=False)
+    _proposal: _IntegrationProposal | None = field(default=None, init=False, repr=False)
     _compiled: dict[Any, Any] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
@@ -178,7 +200,10 @@ class ParameterizedGalaxyModel:
                 raise ValueError(f"{name} must be a positive integer")
         if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
-        if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+        if (
+            bool(getattr(self.param_type, "uses_theta_mu_physical", False))
+            and _has_physical_sampler(self.galaxy.density)
+        ):
             self._importance_proposal()
 
     @property
@@ -236,11 +261,24 @@ class ParameterizedGalaxyModel:
         )
 
     def _importance_proposal(self):
+        if (
+            bool(getattr(self.param_type, "uses_theta_mu_physical", False))
+            and not _has_physical_sampler(self.galaxy.density)
+        ):
+            raise RuntimeError(
+                "this backend cannot importance-sample hidden ML, DL, and DS "
+                "for a parallax-free model with dynamic source conditioning. "
+                "Use the Flow backend, remove the dynamic magnitudes/physical "
+                "prior, or sample the distances explicitly."
+            )
         if self._proposal is None:
-            self._proposal = _build_importance_proposal(
+            self._proposal = _build_integration_proposal(
                 self.galaxy,
                 self.integration_samples,
                 self.seed,
+                with_mass=bool(
+                    getattr(self.param_type, "uses_theta_mu_physical", False)
+                ),
             )
         return self._proposal
 
@@ -380,27 +418,32 @@ class ParameterizedGalaxyModel:
             rng=rng,
         )
 
-    def _isochrone_joint_terms(self, theta, *, magnitudes, context=None):
-        """Return paired-QMC log terms and physical candidates.
+    def _isochrone_conditional_terms(self, theta, *, magnitudes, context=None):
+        """Return paired-QMC conditional terms and physical candidates.
 
         ``magnitudes`` is a pytree whose leaves have leading dimension
         ``integration_samples``. thetaS and every hidden physical dimension
         use the same QMC row, avoiding a Cartesian thetaS-by-distance grid.
+
+        The terms represent the physical density conditional on the supplied
+        magnitudes. They exclude the marginal CMD factor
+        ``log p(magnitudes)``; callers wanting the joint target must add that
+        factor or use :meth:`log_joint_density`.
         """
 
         self._importance_proposal()
         key = (
-            "isochrone_joint",
+            "isochrone_conditional",
             context is not None,
             tuple(sorted(magnitudes)),
         )
         if key not in self._compiled:
             if context is None:
-                fn = lambda theta, magnitudes: self._isochrone_joint_terms_impl(
+                fn = lambda theta, magnitudes: self._isochrone_conditional_terms_impl(
                     theta, magnitudes, None
                 )
             else:
-                fn = lambda theta, context, magnitudes: self._isochrone_joint_terms_impl(
+                fn = lambda theta, context, magnitudes: self._isochrone_conditional_terms_impl(
                     theta, magnitudes, context
                 )
             self._compiled[key] = jax.jit(fn)
@@ -410,7 +453,7 @@ class ParameterizedGalaxyModel:
         args.append(magnitudes)
         return self._compiled[key](*args)
 
-    def _isochrone_joint_terms_impl(self, theta, magnitudes, context):
+    def _isochrone_conditional_terms_impl(self, theta, magnitudes, context):
         proposal = self._importance_proposal()
         first_magnitude = next(iter(magnitudes.values()))
         if jnp.ndim(first_magnitude) == 0:
@@ -453,13 +496,21 @@ class ParameterizedGalaxyModel:
                 return values
             return tuple(values[:, index] for index in range(values.shape[1]))
 
-        def joint_log_density(values, current_theta_s, current_magnitudes):
+        def conditional_log_density(values, current_theta_s, current_magnitudes):
             ml, dl, ds, mu_n, mu_e = values[:5]
             current = current_context(current_theta_s)
             value = self.galaxy.log_joint_density(
                 (ml, dl, ds, mu_n, mu_e),
                 magnitudes=current_magnitudes,
                 theta_star_mas=current_theta_s,
+                context=current,
+            )
+            reference_magnitude, color = self.galaxy.isochrone.values_from_magnitudes(
+                current_magnitudes
+            )
+            value = value - self.galaxy._conditional_prior.source_prior.log_marginal_density(
+                reference_magnitude,
+                color,
                 context=current,
             )
             return value + _physical_prior_sum(
@@ -492,19 +543,17 @@ class ParameterizedGalaxyModel:
                     theta, current_context(current_theta_s)
                 )
             )(theta_s)
-            ds = proposal.ds
-            dl = proposal.x * ds
-            pi_rel = 1.0 / dl - 1.0 / ds
-            ml = theta_e**2 / (_KAPPA * pi_rel)
+            ml, dl, ds, physical_jacobian = _mass_proposal_geometry(
+                proposal, theta_e, mu
+            )
             mu_n = mu * jnp.cos(proposal.phi)
             mu_e = mu * jnp.sin(proposal.phi)
             values = (ml, dl, ds, mu_n, mu_e)
-            physical_jacobian = (
-                jnp.log(2.0 * jnp.abs(theta_e) / (_KAPPA * pi_rel))
-                + jnp.log(ds)
-                + jnp.log(jnp.abs(mu))
+            log_q_physical = (
+                proposal.log_q_ds
+                + proposal.log_q_mass
+                - jnp.log(2.0 * jnp.pi)
             )
-            log_q_physical = proposal.log_q
         elif marginalizes_distance:
             full_impl = self.param_type.distance_impl
 
@@ -550,7 +599,7 @@ class ParameterizedGalaxyModel:
             physical_jacobian = 0.0
             log_q_physical = jnp.zeros_like(theta_s)
 
-        logp = jax.vmap(joint_log_density)(
+        logp = jax.vmap(conditional_log_density)(
             jnp.stack(values[:5], axis=1), theta_s, magnitudes
         )
         terms = (
@@ -611,7 +660,7 @@ class ParameterizedGalaxyModel:
 __all__ = ["ParameterizedGalaxyModel"]
 
 
-def _build_importance_proposal(galaxy, samples, seed):
+def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
     density = galaxy.density
     distance = np.asarray(density.distance.distance_pc, dtype=float) / 1000.0
     source = np.sum(
@@ -629,52 +678,86 @@ def _build_importance_proposal(galaxy, samples, seed):
     points = _halton_points(samples, 5, seed)
     ds = np.interp(points[:, 0], cdf, distance)
     q_ds = np.interp(ds, distance, source_density)
+    common = {
+        "ds": jnp.asarray(ds),
+        "phi": jnp.asarray(2.0 * np.pi * points[:, 3]),
+        "log_q_ds": jnp.asarray(np.log(q_ds)),
+        "theta_u": jnp.asarray(points[:, 4]),
+    }
 
-    ratio_density, ratio_edges = _flow_ratio_histogram(density, seed)
-    ratio_probability = ratio_density * np.diff(ratio_edges)
-    ratio_cdf = np.concatenate(([0.0], np.cumsum(ratio_probability)))
-    ratio_cdf /= ratio_cdf[-1]
-    fitted_x = np.interp(points[:, 2], ratio_cdf, ratio_edges)
-    x = np.where(points[:, 1] < 0.8, fitted_x, points[:, 2])
+    if not with_mass:
+        return _IntegrationProposal(**common)
+
+    mass_density, mass_edges, broad_center, broad_sigma = _flow_mass_proposal(
+        density, seed
+    )
+    mass_probability = mass_density * np.diff(mass_edges)
+    mass_cdf = np.concatenate(([0.0], np.cumsum(mass_probability)))
+    mass_cdf /= mass_cdf[-1]
+    fitted_log_mass = np.interp(points[:, 2], mass_cdf, mass_edges)
+    broad_log_mass = broad_center + broad_sigma * np.asarray(
+        ndtri(jnp.asarray(np.clip(points[:, 2], 1.0e-7, 1.0 - 1.0e-7)))
+    )
+    fitted_fraction = 0.9
+    log_mass = np.where(
+        points[:, 1] < fitted_fraction,
+        fitted_log_mass,
+        broad_log_mass,
+    )
     bin_index = np.clip(
-        np.searchsorted(ratio_edges, x, side="right") - 1,
+        np.searchsorted(mass_edges, log_mass, side="right") - 1,
         0,
-        len(ratio_density) - 1,
+        len(mass_density) - 1,
     )
-    q_x = 0.8 * ratio_density[bin_index] + 0.2
-    phi = 2.0 * np.pi * points[:, 3]
-    log_q = np.log(q_ds) + np.log(q_x) - np.log(2.0 * np.pi)
-    return _ImportanceProposal(
-        ds=jnp.asarray(ds),
-        x=jnp.asarray(np.clip(x, 1.0e-6, 1.0 - 1.0e-6)),
-        phi=jnp.asarray(phi),
-        log_q=jnp.asarray(log_q),
-        log_q_ds=jnp.asarray(np.log(q_ds)),
-        theta_u=jnp.asarray(points[:, 4]),
+    inside_histogram = (log_mass >= mass_edges[0]) & (log_mass <= mass_edges[-1])
+    q_log_mass_histogram = np.where(
+        inside_histogram, mass_density[bin_index], 0.0
+    )
+    standardized_mass = (log_mass - broad_center) / broad_sigma
+    q_log_mass_broad = (
+        np.exp(-0.5 * standardized_mass**2)
+        / (np.sqrt(2.0 * np.pi) * broad_sigma)
+    )
+    q_log_mass = (
+        fitted_fraction * q_log_mass_histogram
+        + (1.0 - fitted_fraction) * q_log_mass_broad
+    )
+    mass = np.exp(log_mass)
+    q_mass = q_log_mass / mass
+    return _MassImportanceProposal(
+        **common,
+        mass=jnp.asarray(mass),
+        log_q_mass=jnp.asarray(np.log(q_mass)),
     )
 
 
-def _flow_ratio_histogram(density, seed, *, proposal_samples=2048, bins=32):
+def _flow_mass_proposal(density, seed, *, proposal_samples=16384, bins=96):
     sampler = getattr(density, "sample_source_group", None)
     kernel_sampler = getattr(density, "_sample_kernel", None)
     if sampler is None or kernel_sampler is None:
-        edges = np.linspace(0.0, 1.0, bins + 1)
-        return np.ones(bins, dtype=float), edges
+        raise TypeError("mass proposal requires a physical Flow sampler")
 
     source_key, kernel_key = jax.random.split(jax.random.key(seed))
     source_keys = jax.random.split(source_key, proposal_samples)
     kernel_keys = jax.random.split(kernel_key, proposal_samples)
     ds, group = jax.vmap(sampler)(source_keys)
     physical = jax.vmap(kernel_sampler)(kernel_keys, ds, group)
-    ratio = np.asarray(physical[:, 1] / physical[:, 2], dtype=float)
-    ratio = ratio[np.isfinite(ratio) & (ratio > 0.0) & (ratio < 1.0)]
-    edges = np.linspace(0.0, 1.0, bins + 1)
-    if not len(ratio):
-        return np.ones(bins, dtype=float), edges
-    counts, _ = np.histogram(ratio, bins=edges)
+    mass = np.asarray(physical[:, 0], dtype=float)
+    log_mass = np.log(mass[np.isfinite(mass) & (mass > 0.0)])
+    if not len(log_mass):
+        edges = np.linspace(np.log(1.0e-4), np.log(1.0e3), bins + 1)
+        histogram = np.full(bins, 1.0 / (edges[-1] - edges[0]))
+        return histogram, edges, np.log(0.3), 4.0
+
+    broad_center = float(np.median(log_mass))
+    broad_sigma = max(3.0, 3.0 * float(np.std(log_mass)))
+    lower, upper = np.quantile(log_mass, (0.001, 0.999))
+    padding = max(0.5, 0.1 * float(upper - lower))
+    edges = np.linspace(lower - padding, upper + padding, bins + 1)
+    counts, _ = np.histogram(log_mass, bins=edges)
     density_values = counts.astype(float) + 0.5
     density_values /= np.sum(density_values * np.diff(edges))
-    return density_values, edges
+    return density_values, edges, broad_center, broad_sigma
 
 
 def _halton_points(samples, dimensions, seed):
