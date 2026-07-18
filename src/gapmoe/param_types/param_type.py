@@ -88,8 +88,6 @@ class ParamType:
             return {}
         return self._impl.to_derived(theta, context)
 
-<<<<<<< HEAD
-=======
     def to_deterministic_physical(
         self,
         theta: Any,
@@ -99,7 +97,6 @@ class ParamType:
             raise TypeError("This param_type does not provide deterministic physical values.")
         return self._impl.to_deterministic_physical(theta, context)
 
->>>>>>> codex/inference-mode-cleanup
     def to_mu_physical(
         self,
         theta: Any,
@@ -438,8 +435,6 @@ class _StaticParallaxMarginalDistanceParamType:
     ):
         return _static_parallax_log_abs_det_with_distance_grid_jax(theta, distances, context)
 
-<<<<<<< HEAD
-=======
     def to_deterministic_physical(
         self,
         theta: Any,
@@ -462,7 +457,6 @@ class _StaticParallaxMarginalDistanceParamType:
             "mu_E": mu_geo * piEE / piE + thetaE * piE * vE,
         }
 
->>>>>>> codex/inference-mode-cleanup
     def to_physical(
         self,
         theta: Any,

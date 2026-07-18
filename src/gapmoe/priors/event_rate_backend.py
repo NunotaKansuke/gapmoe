@@ -18,8 +18,6 @@ def log_event_rate_backend(ML: float, DL: float, DS: float, mu: float, kappa: fl
     log_gamma = 2.0 * jnp.log(DL) + jnp.log(theta_e) + jnp.log(mu)
     valid = valid & (pi_rel > 0.0) & jnp.isfinite(theta_e) & (theta_e > 0.0)
     return jnp.where(valid, log_gamma, -jnp.inf)
-<<<<<<< HEAD
-=======
 
 
 def log_flow_kernel_rate_backend(ML: float, DL: float, DS: float, mu: float, kappa: float = KAPPA) -> jnp.ndarray:
@@ -39,4 +37,3 @@ def log_flow_kernel_rate_backend(ML: float, DL: float, DS: float, mu: float, kap
     log_gamma = jnp.log(theta_e) + jnp.log(mu)
     valid = valid & (pi_rel > 0.0) & jnp.isfinite(theta_e) & (theta_e > 0.0)
     return jnp.where(valid, log_gamma, -jnp.inf)
->>>>>>> codex/inference-mode-cleanup

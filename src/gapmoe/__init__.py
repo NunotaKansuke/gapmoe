@@ -1,10 +1,7 @@
 """gapmoe public API."""
 
 __all__ = [
-<<<<<<< HEAD
-=======
     "Flow",
->>>>>>> codex/inference-mode-cleanup
     "Histogram",
     "Isochrone",
     "Model",
@@ -16,16 +13,10 @@ __all__ = [
 
 
 def __getattr__(name):
-<<<<<<< HEAD
-    if name in {"Histogram", "Isochrone", "Model"}:
-        from .model import Histogram, Isochrone, Model
-        return {
-=======
     if name in {"Flow", "Histogram", "Isochrone", "Model"}:
         from .model import Flow, Histogram, Isochrone, Model
         return {
             "Flow": Flow,
->>>>>>> codex/inference-mode-cleanup
             "Histogram": Histogram,
             "Isochrone": Isochrone,
             "Model": Model,

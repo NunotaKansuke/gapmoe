@@ -24,16 +24,10 @@ explicitly. Binary lens orbital motion can be selected with
 ``orbital_motion="circular"`` or ``"kepler"``; distance marginalization is
 currently static-only.
 
-<<<<<<< HEAD
-No-parallax models use the histogram backend's native precomputed projections.
-When source photometry or additional hidden-physical priors require an
-uncollapsed integrand, sample the corresponding physical distances explicitly.
-=======
 Flow-backed no-parallax models use fixed importance points for hidden
 ``DL``, ``DS``, and proper-motion direction. Histogram backends continue to
 use their native precomputed projections when source photometry and additional
 hidden-physical priors do not require the uncollapsed integrand.
->>>>>>> codex/inference-mode-cleanup
 
 **Context**
 

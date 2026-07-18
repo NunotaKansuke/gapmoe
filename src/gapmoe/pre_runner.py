@@ -21,15 +21,12 @@ OptionSequence = Sequence[OptionValue]
 OptionMap = Mapping[str, Union[OptionValue, OptionSequence]]
 
 
-<<<<<<< HEAD
-=======
 def _binary_option(name: str, value: int | bool) -> int:
     if value not in (0, 1, False, True):
         raise ValueError(f"{name} must be 0 or 1")
     return int(value)
 
 
->>>>>>> codex/inference-mode-cleanup
 @dataclass(frozen=True)
 class PreRunResult:
     ra_deg: Optional[float]

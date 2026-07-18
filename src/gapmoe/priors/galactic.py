@@ -173,8 +173,6 @@ class _ParameterizedNumpyEngine:
             return {}
         return _coerce_derived(self.param_type.to_derived(theta, context))
 
-<<<<<<< HEAD
-=======
     def to_deterministic_physical(
         self,
         theta: Any,
@@ -221,7 +219,6 @@ class _ParameterizedNumpyEngine:
             for key, value in zip(keys, physical)
         }
 
->>>>>>> codex/inference-mode-cleanup
     def to_mu_physical(
         self,
         theta: Any,

@@ -53,16 +53,10 @@ def test_emcee_physical_params_notebook_code_compiles_and_is_clear() -> None:
     code_cells, source = _load_code(path)
     _assert_executed(code_cells)
 
-<<<<<<< HEAD
-    assert "HistogramDensity.from_paths(" in source
-    assert "GalacticModel(density)" in source
-    assert "prior.log_prob(*theta)" in source
-=======
     assert "Model().resume(" in source
     assert "model.isochrone(" in source
     assert "model.galactic_model(isochrone)" in source
     assert "compiled_log_density" in source
->>>>>>> codex/inference-mode-cleanup
     assert "genulens_out.dat" in source
     assert "genulens_weights" in source
     assert "fig = corner.corner(" in source

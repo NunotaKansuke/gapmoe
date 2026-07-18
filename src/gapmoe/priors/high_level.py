@@ -8,11 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-<<<<<<< HEAD
-=======
 import jax
 import jax.numpy as jnp
->>>>>>> codex/inference-mode-cleanup
 
 from gapmoe.source_selection import (
     CmdCoordinates,
@@ -26,15 +23,11 @@ from gapmoe.source_selection import (
     SourceSelection,
 )
 from gapmoe.pre_runner import PreRunResult, PreRunner
-<<<<<<< HEAD
-from .source import EventPrior5D, SourceCmdPrior
-=======
 from gapmoe.flow_releases import FlowRelease, get_flow_release
 from gapmoe.flow_package import FlowPackage
 
 from .source import EventPrior5D, SourceCmdPrior
 from .event_rate_backend import log_flow_kernel_rate_backend
->>>>>>> codex/inference-mode-cleanup
 
 
 Context = Mapping[str, Any] | None
@@ -168,8 +161,6 @@ class GalaxyModel:
             include_event_rate=include_event_rate,
         )
 
-<<<<<<< HEAD
-=======
     @classmethod
     def from_flow_package(
         cls,
@@ -207,7 +198,6 @@ class GalaxyModel:
             include_event_rate=include_event_rate,
         )
 
->>>>>>> codex/inference-mode-cleanup
     def __post_init__(self) -> None:
         if self.isochrone.table is None:
             raise ValueError("isochrone must be built before constructing GalaxyModel")
@@ -350,8 +340,6 @@ class GalaxyModel:
             context=context,
         )
 
-<<<<<<< HEAD
-=======
     def sample_kernel(self, key: Any, *, ds: Any, source_group: int):
         """Sample the Flow lens kernel at fixed DS and source group.
 
@@ -433,7 +421,6 @@ class GalaxyModel:
         return self._conditional_prior.density.distance.source_by_component * photometric
 
 
->>>>>>> codex/inference-mode-cleanup
 class Workspace:
     """Internal workspace for preparing event-local histogram artifacts.
 
@@ -455,22 +442,16 @@ class Workspace:
         self._genulens_root = genulens_root
         self._auto_build = auto_build
         self._backend = backend
-<<<<<<< HEAD
-=======
         # A bundled Flow does not need a local genulens checkout.  Keep the
         # legacy runner eager only when its location was explicitly supplied.
->>>>>>> codex/inference-mode-cleanup
         self._runner = self._new_runner() if genulens_root is not None else None
         self.directory: Path | None = None
         self._settings: dict[str, Any] = {"dust_scale_height_pc": 164.0, "remnant": 0, "binary": 0}
         self._explicit_settings: set[str] = set()
         self._prepare_options: dict[str, Any] = {}
         self._prepared: PreRunResult | None = None
-<<<<<<< HEAD
-=======
         self._flow_release: FlowRelease | None = None
         self._flow_package: FlowPackage | None = None
->>>>>>> codex/inference-mode-cleanup
 
     def _new_runner(self) -> PreRunner:
         return PreRunner(
@@ -510,15 +491,12 @@ class Workspace:
         if "extinction" in settings and ("ai_rc" in settings or "evi_rc" in settings):
             raise ValueError("use either extinction or ai_rc/evi_rc, not both")
 
-<<<<<<< HEAD
-=======
         candidate = {**self._settings, **settings}
         if self._flow_release is not None and "l" in candidate and "b" in candidate:
             self._flow_release.validate_sightline(candidate["l"], candidate["b"])
             self._flow_release.validate_model_options(
                 remnant=candidate["remnant"], binary=candidate["binary"]
             )
->>>>>>> codex/inference-mode-cleanup
         precompute_changed = any(
             name in settings and settings[name] != self._settings.get(name) for name in ("l", "b", "remnant", "binary")
         )
@@ -528,11 +506,6 @@ class Workspace:
             self._prepared = None
         return self
 
-<<<<<<< HEAD
-    def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Workspace":
-        """Create or reuse raw pre-gapmoe artifacts for the configured sightline."""
-
-=======
     def set_flow(self, *, release: str = "rate-included-v1") -> "Workspace":
         """Select a bundled trained flow release for the current sightline."""
 
@@ -552,7 +525,6 @@ class Workspace:
 
         if self._flow_release is not None:
             raise RuntimeError("set_flow() selects a pre-trained backend; do not call prepare()")
->>>>>>> codex/inference-mode-cleanup
         self.directory = Path(directory).expanduser().resolve()
         if not force:
             cached = self._load_prepared_directory(self.directory)
@@ -650,8 +622,6 @@ class Workspace:
     def galactic_model(self, isochrone: IsochroneModel, *, include_event_rate: bool = True) -> GalaxyModel:
         """Return the five-dimensional event prior for an isochrone model."""
 
-<<<<<<< HEAD
-=======
         if self._flow_release is not None:
             self._flow_release.validate_sightline(self._settings["l"], self._settings["b"])
             self._flow_release.validate_model_options(
@@ -674,7 +644,6 @@ class Workspace:
                 dust_scale_height_pc=self._settings["dust_scale_height_pc"],
                 include_event_rate=include_event_rate,
             )
->>>>>>> codex/inference-mode-cleanup
         if self._prepared is None:
             raise RuntimeError("call prepare() before galactic_model()")
         return GalaxyModel.from_pre_run(

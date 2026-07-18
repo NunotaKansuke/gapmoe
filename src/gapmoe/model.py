@@ -7,19 +7,14 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-<<<<<<< HEAD
-=======
 from .flow_package import FlowPackage
 from .flow_releases import get_flow_release
->>>>>>> codex/inference-mode-cleanup
 from .priors.high_level import GalaxyModel, IsochroneModel as Isochrone
 from .priors.parameterized import ParameterizedGalaxyModel
 from .pre_runner import PreRunResult
 
 
 @dataclass(frozen=True)
-<<<<<<< HEAD
-=======
 class Flow:
     """A trained Flow backend used to construct a physical Galaxy model."""
 
@@ -66,7 +61,6 @@ class Flow:
 
 
 @dataclass(frozen=True)
->>>>>>> codex/inference-mode-cleanup
 class Histogram:
     """A precomputed event-local histogram backend."""
 
@@ -165,11 +159,7 @@ class Model:
         b: float,
         source: Isochrone,
         extinction: Mapping[str, float] | None = None,
-<<<<<<< HEAD
-        backend: Histogram,
-=======
         backend: Any | None = None,
->>>>>>> codex/inference-mode-cleanup
         dm_rc: float | None = None,
         dust_scale_height_pc: float = 164.0,
         include_event_rate: bool = True,
@@ -177,10 +167,7 @@ class Model:
         binary: int = 0,
         integration_samples: int = 512,
         direction_samples: int = 32,
-<<<<<<< HEAD
-=======
         source_group_integration: str = "exact",
->>>>>>> codex/inference-mode-cleanup
         seed: int = 0,
     ) -> None:
         if source.table is None:
@@ -188,10 +175,7 @@ class Model:
                 reference_edges=_default_reference_edges(),
                 color_edges=_default_color_edges(),
             )
-<<<<<<< HEAD
-=======
         backend = Flow() if backend is None else backend
->>>>>>> codex/inference-mode-cleanup
         build = getattr(backend, "build", None)
         if build is None:
             raise TypeError(
@@ -221,10 +205,7 @@ class Model:
             param_type,
             integration_samples=integration_samples,
             direction_samples=direction_samples,
-<<<<<<< HEAD
-=======
             source_group_integration=source_group_integration,
->>>>>>> codex/inference-mode-cleanup
             seed=seed,
         )
 
@@ -240,13 +221,10 @@ class Model:
     def direction_samples(self) -> int:
         return self._model.direction_samples
 
-<<<<<<< HEAD
-=======
     @property
     def source_group_integration(self) -> str:
         return self._model.source_group_integration
 
->>>>>>> codex/inference-mode-cleanup
     def prior(self, fn):
         """Add a JAX-compatible prior over physical or derived quantities."""
 
@@ -266,8 +244,6 @@ class Model:
             joint=joint,
         )
 
-<<<<<<< HEAD
-=======
     def log_density_and_physical(
         self,
         theta,
@@ -285,7 +261,6 @@ class Model:
             joint=joint,
         )
 
->>>>>>> codex/inference-mode-cleanup
     def is_valid(self, theta, *, context=None):
         return self._model.is_valid(theta, context=context)
 
@@ -423,8 +398,4 @@ def _validate_prepared_model_option(
         )
 
 
-<<<<<<< HEAD
-__all__ = ["Histogram", "Isochrone", "Model"]
-=======
 __all__ = ["Flow", "Histogram", "Isochrone", "Model"]
->>>>>>> codex/inference-mode-cleanup

@@ -31,12 +31,6 @@ def test_parallax_free_backend_without_physical_sampler_rejects_dynamic_qmc():
     model = ParameterizedGalaxyModel(galaxy, ParamType(parallax=False))
 
     assert model._proposal is None
-<<<<<<< HEAD
-    with pytest.raises(RuntimeError, match="sample the distances explicitly"):
-        model._importance_proposal()
-
-
-=======
     with pytest.raises(RuntimeError, match="Use the Flow backend"):
         model._importance_proposal()
 
@@ -60,7 +54,6 @@ def test_distance_marginalization_builds_no_unused_mass_proposal():
     assert not hasattr(proposal, "mass")
 
 
->>>>>>> codex/inference-mode-cleanup
 def test_source_group_qmc_rejects_unsupported_parameterization():
     galaxy = SimpleNamespace(density=SimpleNamespace())
 

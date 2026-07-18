@@ -188,8 +188,6 @@ def test_prepare_rejects_a_cached_directory_at_a_different_sightline(tmp_path, f
         model.prepare(directory)
 
 
-<<<<<<< HEAD
-=======
 def test_set_flow_checks_the_release_sightline_coverage(fake_genulens_root):
     model = Workspace(genulens_root=fake_genulens_root).set(l=1.0, b=-3.9)
 
@@ -224,7 +222,6 @@ def test_remnant_and_binary_are_forwarded_and_must_match_a_flow_release(tmp_path
     assert captured["binary"] == 0
 
 
->>>>>>> codex/inference-mode-cleanup
 def test_isochrone_reuses_the_cmd_table_saved_in_a_resumed_directory(tmp_path, fake_genulens_root):
     directory = tmp_path / "event-001"
     directory.mkdir()
