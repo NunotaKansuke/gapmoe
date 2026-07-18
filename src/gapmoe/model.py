@@ -244,6 +244,23 @@ class Model:
             joint=joint,
         )
 
+    def log_density_and_physical(
+        self,
+        theta,
+        *,
+        uniforms,
+        context=None,
+        magnitudes=None,
+        joint=False,
+    ):
+        return self._model.log_density_and_physical(
+            theta,
+            uniforms=uniforms,
+            context=context,
+            magnitudes=magnitudes,
+            joint=joint,
+        )
+
     def is_valid(self, theta, *, context=None):
         return self._model.is_valid(theta, context=context)
 

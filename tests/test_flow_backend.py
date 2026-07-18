@@ -175,6 +175,15 @@ def test_bundled_flow_parameterizes_and_marginalizes_source_distance():
     assert np.isfinite(value)
     assert set(physical) == {"thetaE", "piE", "ML", "mu_N", "mu_E"}
 
+    shared_value, draw = prior.log_density_and_physical(
+        theta,
+        context=context,
+        uniforms=(0.37, 0.73),
+    )
+    assert shared_value == pytest.approx(value)
+    assert 0.0 < draw["DL"] < draw["DS"]
+    assert draw["ML"] == pytest.approx(physical["ML"])
+
 
 def test_parameterized_flow_applies_prior_inside_source_distance_integral():
     baseline = _model(ParamType(parallax=True, distance="marginalize"))
@@ -462,6 +471,32 @@ def test_no_parallax_importance_integral_applies_hidden_physical_prior():
     assert draw["DS"] >= 6.0
 
 
+def test_no_parallax_integral_returns_physical_from_same_terms():
+    prior = _model(
+        ParamType(parallax=False),
+        integration_samples=64,
+        seed=3,
+    )
+
+    @prior.prior
+    def _(DS, **params):
+        del params
+        return jax.numpy.where(DS >= 6.0, 0.0, -jax.numpy.inf)
+
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+    value, draw = prior.log_density_and_physical(
+        theta,
+        context=context,
+        uniforms=(0.37, 0.73),
+    )
+
+    assert np.isfinite(value)
+    assert draw["DS"] >= 6.0
+    assert 0.0 < draw["DL"] < draw["DS"]
+    assert draw["mu"] == pytest.approx(np.hypot(draw["mu_N"], draw["mu_E"]))
+
+
 def test_no_parallax_flow_samples_distances_and_integrates_direction():
     prior = _model(
         ParamType(parallax=False, distance="sample"),
@@ -476,11 +511,38 @@ def test_no_parallax_flow_samples_distances_and_integrates_direction():
         context=context,
         rng=np.random.default_rng(5),
     )
+    shared_value, shared_draw = prior.log_density_and_physical(
+        theta,
+        context=context,
+        uniforms=(0.37, 0.73),
+    )
 
     assert np.isfinite(value)
+    assert shared_value == pytest.approx(value)
     assert draw["DL"] == pytest.approx(4.0)
     assert draw["DS"] == pytest.approx(8.0)
     assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+    assert shared_draw["DL"] == pytest.approx(4.0)
+    assert shared_draw["DS"] == pytest.approx(8.0)
+
+
+def test_kepler_physical_auxiliary_keeps_orbital_elements():
+    prior = _model(ParamType(parallax=True, orbital_motion="kepler"))
+    theta = np.asarray((
+        8000.0, 50.0, 0.1, 0.005, 0.1, 1.0, 0.5,
+        0.1, 0.05, -0.0001, -0.0001, -0.01, 0.1, 1.1,
+    ))
+    context = {"thS": 0.005, "vEarth": (0.0, 0.0)}
+
+    value, draw = prior.log_density_and_physical(
+        theta,
+        context=context,
+        uniforms=(0.37, 0.73),
+    )
+
+    assert np.isfinite(value)
+    assert {"ML", "DL", "DS", "mu_N", "mu_E", "e", "cos_i"} <= set(draw)
+    assert 0.0 <= draw["e"] < 1.0
 
 
 def test_bundled_flow_samples_the_full_source_aware_prior():

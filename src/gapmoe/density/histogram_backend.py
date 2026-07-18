@@ -88,11 +88,16 @@ class DistanceDensityTable:
         value = self.lens_cumulative_integral[idx] + partial
         left_rate, right_rate = _tail_rates(self.distance_pc, self.lens_density_total)
         lower_total = self.lens_density_total[0] / left_rate * (1.0 - jnp.exp(-left_rate * self.distance_pc[0]))
-        tail = self.lens_density_total[-1] / right_rate * (1.0 - jnp.exp(-right_rate * (ds_pc - self.distance_pc[-1])))
+        right_delta = jnp.maximum(ds_pc - self.distance_pc[-1], 0.0)
+        left_delta = jnp.maximum(self.distance_pc[0] - ds_pc, 0.0)
+        tail = self.lens_density_total[-1] / right_rate * (1.0 - jnp.exp(-right_rate * right_delta))
         value = jnp.where(ds_pc <= 0.0, 0.0, lower_total + value)
-        value = jnp.where(ds_pc < self.distance_pc[0], lower_total - self.lens_density_total[0] / left_rate * jnp.exp(-left_rate * (self.distance_pc[0] - ds_pc)), value)
+        value = jnp.where(
+            ds_pc < self.distance_pc[0],
+            lower_total - self.lens_density_total[0] / left_rate * jnp.exp(-left_rate * left_delta),
+            value,
+        )
         return jnp.where(ds_pc >= self.distance_pc[-1], lower_total + self.lens_cumulative_integral[-1] + tail, value)
-        return value
 
     def component_fractions(self, dl_kpc: float) -> jnp.ndarray:
         vals = jnp.array(
@@ -292,6 +297,11 @@ class MurelHistogram:
     phi_len: jnp.ndarray
     source_mu_y: jnp.ndarray
     source_phi_y: jnp.ndarray
+    phi_region_areas: jnp.ndarray
+    phi_left_rate: jnp.ndarray
+    phi_right_rate: jnp.ndarray
+    phi_first: jnp.ndarray
+    phi_last: jnp.ndarray
     ds_values: jnp.ndarray
     dl_values: jnp.ndarray
     grid_index: jnp.ndarray
@@ -337,17 +347,42 @@ class MurelHistogram:
         source_phi_y = _pad_group_blocks([block[5] for block in blocks], max_phi_len)
         grid_index = _make_pair_grid_index(density.murel.pairs, density.murel.ds_values, density.murel.dl_values)
 
+        phi_x_jax = jnp.asarray(phi_x)
+        source_phi_y_jax = jnp.asarray(source_phi_y)
+        phi_len_jax = jnp.asarray(phi_len)
+
+        def pair_parameters(current_x, current_y, current_len):
+            return vmap(
+                lambda y: _phi_distribution_parameters(
+                    current_x, y, current_len
+                ),
+                in_axes=1,
+            )(current_y)
+
+        (
+            phi_region_areas,
+            phi_left_rate,
+            phi_right_rate,
+            phi_first,
+            phi_last,
+        ) = vmap(pair_parameters)(phi_x_jax, source_phi_y_jax, phi_len_jax)
+
         return cls(
             pairs=jnp.asarray(density.murel.pairs),
             pair_scale=jnp.asarray(density.murel.pair_scale),
             mu_x=jnp.asarray(mu_x),
             mu_y=jnp.asarray(mu_y),
             mu_len=jnp.asarray(mu_len),
-            phi_x=jnp.asarray(phi_x),
+            phi_x=phi_x_jax,
             phi_y=jnp.asarray(phi_y),
             phi_len=jnp.asarray(phi_len),
             source_mu_y=jnp.asarray(source_mu_y),
-            source_phi_y=jnp.asarray(source_phi_y),
+            source_phi_y=source_phi_y_jax,
+            phi_region_areas=phi_region_areas,
+            phi_left_rate=phi_left_rate,
+            phi_right_rate=phi_right_rate,
+            phi_first=phi_first,
+            phi_last=phi_last,
             ds_values=jnp.asarray(density.murel.ds_values),
             dl_values=jnp.asarray(density.murel.dl_values),
             grid_index=jnp.asarray(grid_index),
@@ -403,6 +438,106 @@ class MurelHistogram:
 
         values = vmap(interp_one)(safe_indices.ravel(), flat_weights).reshape(pair_indices.shape)
         return jnp.where(pair_indices >= 0, values, 0.0)
+
+    def sample_phi(
+        self,
+        dl_kpc: float,
+        ds_kpc: float,
+        uniform: float,
+        source_group_weights: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
+        """Sample the piecewise-linear conditional direction density."""
+        if source_group_weights is None:
+            source_group_weights = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0])
+        if self.interpolation == "bilinear":
+            ds0, ds1, w_ds, in_ds = _bracket(
+                self.ds_values, ds_kpc * 1000.0
+            )
+            dl0, dl1, w_dl, in_dl = _bracket(
+                self.dl_values, dl_kpc * 1000.0
+            )
+            indices = jnp.asarray((
+                self.grid_index[ds0, dl0],
+                self.grid_index[ds0, dl1],
+                self.grid_index[ds1, dl0],
+                self.grid_index[ds1, dl1],
+            ))
+            weights = jnp.asarray((
+                (1.0 - w_ds) * (1.0 - w_dl),
+                (1.0 - w_ds) * w_dl,
+                w_ds * (1.0 - w_dl),
+                w_ds * w_dl,
+            ))
+            pair_weights = jnp.where(indices >= 0, weights, 0.0)
+            valid = in_ds & in_dl & (jnp.sum(pair_weights) > 0.0)
+        else:
+            nearest = self._nearest_pair_index(dl_kpc, ds_kpc)
+            indices = jnp.full((4,), nearest)
+            pair_weights = jnp.asarray((1.0, 0.0, 0.0, 0.0))
+            valid = True
+
+        safe_indices = jnp.maximum(indices, 0)
+        group_areas = vmap(self._phi_group_areas)(safe_indices)
+        mixture = (
+            pair_weights[:, None]
+            * source_group_weights[None, :]
+            * group_areas
+        )
+        component, local_uniform = _weighted_index_and_local_uniform(
+            mixture.ravel(), uniform
+        )
+        pair_index, group_index = jnp.divmod(
+            component, len(SOURCE_GROUP_NAMES)
+        )
+        phi = self._sample_phi_column(
+            safe_indices[pair_index],
+            group_index,
+            local_uniform,
+        )
+        return jnp.where(valid, phi, 0.0)
+
+    def _phi_group_areas(self, index):
+        return jnp.sum(self.phi_region_areas[index], axis=1)
+
+    def _sample_phi_column(self, index, group_index, uniform):
+        x = self.phi_x[index]
+        y = self.source_phi_y[index, :, group_index]
+        first = self.phi_first[index, group_index]
+        last = self.phi_last[index, group_index]
+        left_rate = self.phi_left_rate[index, group_index]
+        right_rate = self.phi_right_rate[index, group_index]
+        left_span = jnp.maximum(x[first] + jnp.pi, 0.0)
+        right_span = jnp.maximum(jnp.pi - x[last], 0.0)
+        widths = x[1:] - x[:-1]
+        regions = self.phi_region_areas[index, group_index]
+        middle_areas = regions[1:-1]
+        region, local_uniform = _weighted_index_and_local_uniform(
+            regions, uniform
+        )
+        segment = jnp.clip(region - 1, 0, widths.shape[0] - 1)
+        width = widths[segment]
+        y0 = y[segment]
+        slope = (y[segment + 1] - y0) / width
+        target = local_uniform * middle_areas[segment]
+        discriminant = jnp.maximum(y0 * y0 + 2.0 * slope * target, 0.0)
+        curved = 2.0 * target / (y0 + jnp.sqrt(discriminant))
+        linear = target / jnp.where(y0 > 0.0, y0, 1.0)
+        offset = jnp.where(jnp.abs(slope) > 1.0e-12, curved, linear)
+        middle_phi = x[segment] + jnp.clip(offset, 0.0, width)
+
+        left_fraction = jnp.exp(-left_rate * left_span) + local_uniform * (
+            1.0 - jnp.exp(-left_rate * left_span)
+        )
+        left_phi = x[first] + jnp.log(left_fraction) / left_rate
+        right_fraction = 1.0 - local_uniform * (
+            1.0 - jnp.exp(-right_rate * right_span)
+        )
+        right_phi = x[last] - jnp.log(right_fraction) / right_rate
+        return jnp.where(
+            region == 0,
+            left_phi,
+            jnp.where(region == regions.shape[0] - 1, right_phi, middle_phi),
+        )
 
     def _nearest_pair_index(self, dl_kpc: float, ds_kpc: float) -> jnp.ndarray:
         target = jnp.array([ds_kpc * 1000.0, dl_kpc * 1000.0])
@@ -723,16 +858,12 @@ class HistogramDensity:
         include_event_rate: bool = False,
     ) -> jnp.ndarray:
         """Return density with respect to dthetaE dmu, marginalized over DL and DS."""
-        grid = self._distance_grid()
-        safe_pi_rel = jnp.where(grid.valid, grid.pi_rel, 1.0)
-        mass = theta_e * theta_e / (KAPPA * safe_pi_rel)
-        jac = 2.0 * theta_e / (KAPPA * safe_pi_rel)
-        p_mass = self._mass_density_grid(mass, grid.component_fractions)
-        p_mu = self.murel.mu_density_for_pair_indices(grid.pair_indices, mu, grid.source_group_weights)
-        integrand = grid.weights * p_mass * p_mu * jac
-        if include_event_rate:
-            integrand = integrand * grid.dl * grid.dl * theta_e * mu
-        density = jnp.sum(jnp.where(grid.valid, integrand, 0.0))
+        integrand, _ = self._theta_mu_terms(
+            theta_e,
+            mu,
+            include_event_rate=include_event_rate,
+        )
+        density = jnp.sum(integrand)
         return jnp.where((theta_e > 0.0) & (mu > 0.0), density, 0.0)
 
     def log_density_theta_mu(
@@ -745,6 +876,72 @@ class HistogramDensity:
         """Return log density with respect to dthetaE dmu, marginalized over DL and DS."""
         density = self.density_theta_mu(theta_e, mu, include_event_rate=include_event_rate)
         return jnp.where(density > 0.0, jnp.log(density), -jnp.inf)
+
+    def theta_mu_log_terms(
+        self,
+        theta_e: float,
+        mu: float,
+        *,
+        include_event_rate: bool = False,
+    ):
+        """Return analytic distance-quadrature terms and their coordinates."""
+        integrand, physical = self._theta_mu_terms(
+            theta_e,
+            mu,
+            include_event_rate=include_event_rate,
+        )
+        terms = jnp.where(integrand > 0.0, jnp.log(integrand), -jnp.inf)
+        return terms, physical
+
+    def theta_mu_terms(
+        self,
+        theta_e: float,
+        mu: float,
+        *,
+        include_event_rate: bool = False,
+    ):
+        """Return the native linear quadrature terms and coordinates."""
+        return self._theta_mu_terms(
+            theta_e,
+            mu,
+            include_event_rate=include_event_rate,
+        )
+
+    def prepare_theta_mu_integration(self):
+        """Build immutable quadrature arrays before entering a JAX trace."""
+        self._distance_grid()
+
+    def sample_direction(self, dl, ds, mu, uniform):
+        """Sample phi conditional on the analytically marginalized mu."""
+        del mu
+        group_weights = self.distance.source_group_weights(ds)
+        return self.murel.sample_phi(dl, ds, uniform, group_weights)
+
+    def _theta_mu_terms(
+        self,
+        theta_e: float,
+        mu: float,
+        *,
+        include_event_rate: bool,
+    ):
+        grid = self._distance_grid()
+        safe_pi_rel = jnp.where(grid.valid, grid.pi_rel, 1.0)
+        mass = theta_e * theta_e / (KAPPA * safe_pi_rel)
+        jac = 2.0 * theta_e / (KAPPA * safe_pi_rel)
+        p_mass = self._mass_density_grid(mass, grid.component_fractions)
+        p_mu = self.murel.mu_density_for_pair_indices(
+            grid.pair_indices, mu, grid.source_group_weights
+        )
+        integrand = grid.weights * p_mass * p_mu * jac
+        if include_event_rate:
+            integrand = integrand * grid.dl * grid.dl * theta_e * mu
+        valid = grid.valid & (integrand > 0.0) & (theta_e > 0.0) & (mu > 0.0)
+        integrand = jnp.where(valid, integrand, 0.0)
+        return integrand.ravel(), (
+            mass.ravel(),
+            grid.dl.ravel(),
+            grid.ds.ravel(),
+        )
 
     def _theta_mu_integrand(
         self,
@@ -858,6 +1055,44 @@ def _trapz_weights_jax(x: jnp.ndarray) -> jnp.ndarray:
     return weights
 
 
+def _weighted_index_and_local_uniform(weights, uniform):
+    weights = jnp.maximum(jnp.asarray(weights), 0.0)
+    total = jnp.sum(weights)
+    target = jnp.clip(uniform, 0.0, 1.0 - jnp.finfo(weights.dtype).eps) * total
+    cumulative = jnp.cumsum(weights)
+    index = jnp.searchsorted(cumulative, target, side="right")
+    index = jnp.minimum(index, weights.shape[0] - 1)
+    previous = jnp.where(index > 0, cumulative[index - 1], 0.0)
+    selected = weights[index]
+    local = (target - previous) / jnp.where(selected > 0.0, selected, 1.0)
+    return index, jnp.clip(local, 0.0, 1.0)
+
+
+def _phi_distribution_parameters(x, y, valid_len):
+    first, last, _, _ = _positive_sample_indices(y)
+    left_rate, right_rate = _tail_rates(x, y)
+    left_span = jnp.maximum(x[first] + jnp.pi, 0.0)
+    right_span = jnp.maximum(jnp.pi - x[last], 0.0)
+    left = y[first] * (1.0 - jnp.exp(-left_rate * left_span)) / left_rate
+    right = y[last] * (1.0 - jnp.exp(-right_rate * right_span)) / right_rate
+    widths = x[1:] - x[:-1]
+    indices = jnp.arange(widths.shape[0])
+    valid = (
+        (indices >= first)
+        & (indices < last)
+        & (indices < valid_len - 1)
+    )
+    middle = jnp.where(
+        valid, 0.5 * (y[:-1] + y[1:]) * widths, 0.0
+    )
+    regions = jnp.concatenate((
+        jnp.asarray((left,)),
+        middle,
+        jnp.asarray((right,)),
+    ))
+    return regions, left_rate, right_rate, first, last
+
+
 def _pad_blocks(blocks: list[tuple[np.ndarray, np.ndarray]], width: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     x_out = np.zeros((len(blocks), width), dtype=float)
     y_out = np.zeros((len(blocks), width), dtype=float)
@@ -936,10 +1171,12 @@ def _interp_padded(value: float, x: jnp.ndarray, y: jnp.ndarray, valid_len: jnp.
     right_step = jnp.maximum(jnp.median(jnp.diff(x[right_idx])), 1e-12)
     left_rate = jnp.clip(slope(left_idx), 1.0 / (3.0 * left_step), 5.0 / left_step)
     right_rate = jnp.clip(-slope(right_idx), 1.0 / (3.0 * right_step), 5.0 / right_step)
+    left_delta = jnp.maximum(x[first] - value, 0.0)
+    right_delta = jnp.maximum(value - x[last], 0.0)
     tailed = jnp.where(
         below,
-        y[first] * jnp.exp(-left_rate * (x[first] - value)),
-        jnp.where(above, y[last] * jnp.exp(-right_rate * (value - x[last]),), interpolated),
+        y[first] * jnp.exp(-left_rate * left_delta),
+        jnp.where(above, y[last] * jnp.exp(-right_rate * right_delta), interpolated),
     )
     return jnp.where(valid_len > 0, tailed, 0.0)
 
@@ -984,7 +1221,11 @@ def _interp_positive_tail(value: float, x: jnp.ndarray, y: jnp.ndarray, *, lower
     left_rate, right_rate = _tail_rates(x, y)
     first, last, _, _ = _positive_sample_indices(y)
     x0, xn, y0, yn = x[first], x[last], y[first], y[last]
-    result = jnp.where(value < x0, y0 * jnp.exp(-left_rate * (x0 - value)), jnp.where(value > xn, yn * jnp.exp(-right_rate * (value - xn)), jnp.interp(value, x, y)))
+    left_delta = jnp.maximum(x0 - value, 0.0)
+    right_delta = jnp.maximum(value - xn, 0.0)
+    left_tail = y0 * jnp.exp(-left_rate * left_delta)
+    right_tail = yn * jnp.exp(-right_rate * right_delta)
+    result = jnp.where(value < x0, left_tail, jnp.where(value > xn, right_tail, jnp.interp(value, x, y)))
     return jnp.where(value > lower, result, 0.0) if lower is not None else result
 
 
@@ -994,7 +1235,11 @@ def _interp_mass_tail(value: float, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarr
     x0, xn, y0, yn = x[first], x[last], y[first], y[last]
     left_rate, right_rate = _tail_rates(x, y)
     right_rate = jnp.maximum(right_rate, jnp.log(10.0) + 1e-12)
-    result = jnp.where(value < x0, y0 * jnp.exp(-left_rate * (x0 - value)), jnp.where(value > xn, yn * jnp.exp(-right_rate * (value - xn)), jnp.interp(value, x, y)))
+    left_delta = jnp.maximum(x0 - value, 0.0)
+    right_delta = jnp.maximum(value - xn, 0.0)
+    left_tail = y0 * jnp.exp(-left_rate * left_delta)
+    right_tail = yn * jnp.exp(-right_rate * right_delta)
+    result = jnp.where(value < x0, left_tail, jnp.where(value > xn, right_tail, jnp.interp(value, x, y)))
     return jnp.where(jnp.any(support), result, 0.0)
 
 

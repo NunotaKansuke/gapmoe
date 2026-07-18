@@ -254,6 +254,17 @@ class ParameterizedGalaxyModel:
             and _has_physical_sampler(self.galaxy.density)
         ):
             self._importance_proposal()
+        if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+            selected = getattr(self.galaxy, "_selected_prior", None)
+            conditional = getattr(self.galaxy, "_conditional_prior", None)
+            densities = (
+                getattr(selected, "density", self.galaxy.density),
+                getattr(conditional, "density", self.galaxy.density),
+            )
+            for density in {id(item): item for item in densities}.values():
+                prepare = getattr(density, "prepare_theta_mu_integration", None)
+                if prepare is not None:
+                    prepare()
 
     @property
     def names(self):
@@ -391,6 +402,10 @@ class ParameterizedGalaxyModel:
             if magnitudes is not None
             else self.galaxy._selected_prior.density
         )
+        if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+            prepare = getattr(density, "prepare_theta_mu_integration", None)
+            if prepare is not None:
+                prepare()
         if bool(getattr(self.param_type, "uses_theta_mu_physical", False)) and (
             magnitudes is not None
             or bool(self._physical_priors)
@@ -432,6 +447,154 @@ class ParameterizedGalaxyModel:
         return jax.vmap(
             lambda row: evaluator(row, context=context, magnitudes=magnitudes)
         )(jnp.asarray(theta))
+
+    def log_density_and_physical(
+        self,
+        theta,
+        *,
+        uniforms,
+        context=None,
+        magnitudes=None,
+        joint=False,
+    ):
+        """Return the marginal density and one matching conditional draw.
+
+        Integrated physical coordinates are selected from the same quadrature
+        terms used for the returned log density.  This is intended for
+        samplers that persist accepted-state auxiliaries without evaluating
+        the Galactic integral a second time.
+        """
+        if joint and magnitudes is None:
+            raise ValueError("joint source photometry requires magnitudes")
+        self._prepare_integration(magnitudes)
+        view = self._view(magnitudes, joint=joint, context=context)
+        engine = self._jax_engine(
+            magnitudes,
+            joint=joint,
+            context=context,
+        )
+        theta = jnp.asarray(theta)
+        uniforms = jnp.asarray(uniforms)
+        if uniforms.shape != (2,):
+            raise ValueError("uniforms must contain two values")
+
+        if bool(getattr(self.param_type, "marginalizes_distance", False)):
+            if not bool(getattr(self.param_type, "supports_distance_grid", False)):
+                raise TypeError(
+                    "physical auxiliaries require a distance-grid parameterization"
+                )
+            distances, weights = _distance_grid_and_weights(view.distance)
+            values = self.param_type.jax_physical_with_distance_grid(
+                theta, distances, context
+            )
+            logp = jax.vmap(view.log_density)(*values)
+            log_jacobian = (
+                self.param_type.jax_log_abs_det_jacobian_with_distance_grid(
+                    theta, distances, context
+                )
+            )
+            terms = jnp.log(weights) + logp + log_jacobian
+            terms = jnp.where(jnp.isfinite(terms), terms, -jnp.inf)
+            log_density = logsumexp(terms)
+            physical = _select_physical(values, terms, uniforms[0])
+            derived = engine.to_deterministic_physical(theta, context=context)
+        elif bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+            (theta_e, mu), log_jacobian = (
+                engine._to_theta_mu_physical_with_jacobian(theta, context)
+            )
+            if view.proposal is not None:
+                terms, values = view.theta_mu_log_terms(theta_e, mu)
+                log_density = (
+                    logsumexp(terms) - jnp.log(terms.shape[0]) + log_jacobian
+                )
+                physical = _select_physical(values, terms, uniforms[0])
+            else:
+                density = view._prior.density
+                evaluator = getattr(density, "theta_mu_terms", None)
+                if evaluator is None:
+                    raise TypeError(
+                        "the analytic thetaE-mu density must expose "
+                        "theta_mu_terms() for physical auxiliaries"
+                    )
+                weights, distance_values = evaluator(
+                    theta_e,
+                    mu,
+                    include_event_rate=(
+                        view._prior.include_event_rate
+                        and not getattr(density, "event_rate_included", False)
+                    ),
+                )
+                ml, dl, ds = _select_physical_weights(
+                    distance_values, weights, uniforms[0]
+                )
+                direction_sampler = getattr(
+                    density, "sample_direction", None
+                )
+                if direction_sampler is None:
+                    raise TypeError(
+                        "the analytic thetaE-mu density must expose "
+                        "sample_direction() for vector proper motion"
+                    )
+                phi = direction_sampler(dl, ds, mu, uniforms[1])
+                chosen_mu_n = mu * jnp.cos(phi)
+                chosen_mu_e = mu * jnp.sin(phi)
+                physical = (ml, dl, ds, chosen_mu_n, chosen_mu_e)
+                log_density = jnp.log(jnp.sum(weights)) + log_jacobian
+            derived = {"thetaE": theta_e, "mu": mu}
+        elif bool(getattr(self.param_type, "uses_mu_physical", False)):
+            (ml, dl, ds, mu), log_jacobian = (
+                engine._to_mu_physical_with_jacobian(theta, context)
+            )
+            if view.direction_phi is None:
+                density = view._prior.density
+                direction_sampler = getattr(
+                    density, "sample_direction", None
+                )
+                if direction_sampler is None:
+                    raise TypeError(
+                        "the analytic proper-motion density must expose "
+                        "sample_direction() for physical auxiliaries"
+                    )
+                phi = direction_sampler(dl, ds, mu, uniforms[0])
+                mu_n = jnp.asarray((mu * jnp.cos(phi),))
+                mu_e = jnp.asarray((mu * jnp.sin(phi),))
+                terms = jnp.asarray((0.0,))
+                log_density = view.log_density_mu(ml, dl, ds, mu) + log_jacobian
+            else:
+                terms, direction = view.direction_log_terms(ml, dl, ds, mu)
+                mu_n, mu_e = direction
+                log_density = (
+                    logsumexp(terms) - jnp.log(terms.shape[0]) + log_jacobian
+                )
+            values = (
+                jnp.full_like(mu_n, ml),
+                jnp.full_like(mu_n, dl),
+                jnp.full_like(mu_n, ds),
+                mu_n,
+                mu_e,
+            )
+            physical = _select_physical(values, terms, uniforms[0])
+            derived = {"mu": mu}
+        else:
+            values = tuple(self.param_type.to_physical(theta, context))
+            log_jacobian = self.param_type.log_abs_det_jacobian(theta, context)
+            log_density = engine.log_prob_physical(values[:5]) + log_jacobian
+            physical = tuple(values[:5])
+            derived = {
+                name: value
+                for name, value in zip(
+                    getattr(self.param_type, "derived_names", ()),
+                    values[5:],
+                )
+            }
+
+        result = {
+            key: value
+            for key, value in zip(("ML", "DL", "DS", "mu_N", "mu_E"), physical)
+        }
+        result["mu"] = jnp.hypot(result["mu_N"], result["mu_E"])
+        result.update(derived)
+        return jnp.where(jnp.isfinite(log_density), log_density, -jnp.inf), result
 
     def to_physical(self, theta, *, context=None):
         return self._jax_engine().to_physical(theta, context=context)
@@ -870,6 +1033,39 @@ def _draw_log_weight_index(log_weights, rng):
     weights = np.where(finite, np.exp(values - peak), 0.0)
     weights /= np.sum(weights)
     return int(rng.choice(len(values), p=weights))
+
+
+def _distance_grid_and_weights(distance):
+    distances = jnp.asarray(distance.distance_pc) / 1000.0
+    if distances.shape[0] < 2:
+        raise ValueError("distance grid must contain at least two points")
+    widths = jnp.empty_like(distances)
+    widths = widths.at[0].set(0.5 * (distances[1] - distances[0]))
+    widths = widths.at[-1].set(0.5 * (distances[-1] - distances[-2]))
+    widths = widths.at[1:-1].set(0.5 * (distances[2:] - distances[:-2]))
+    return distances, widths
+
+
+def _select_physical(values, log_weights, uniform):
+    finite = jnp.isfinite(log_weights)
+    peak = jnp.max(jnp.where(finite, log_weights, -jnp.inf))
+    weights = jnp.where(finite, jnp.exp(log_weights - peak), 0.0)
+    total = jnp.sum(weights)
+    probabilities = jnp.where(total > 0.0, weights / total, 0.0)
+    index = jnp.searchsorted(jnp.cumsum(probabilities), uniform, side="right")
+    index = jnp.minimum(index, log_weights.shape[0] - 1)
+    return tuple(value[index] for value in values)
+
+
+def _select_physical_weights(values, weights, uniform):
+    weights = jnp.maximum(jnp.asarray(weights), 0.0)
+    total = jnp.sum(weights)
+    target = jnp.clip(
+        uniform, 0.0, 1.0 - jnp.finfo(weights.dtype).eps
+    ) * total
+    index = jnp.searchsorted(jnp.cumsum(weights), target, side="right")
+    index = jnp.minimum(index, weights.shape[0] - 1)
+    return tuple(value[index] for value in values)
 
 
 def _physical_prior_sum(priors, **values):

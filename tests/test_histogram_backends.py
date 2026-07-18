@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from math import cos, isfinite, log, sin
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from gapmoe.density import HistogramDensity
 from gapmoe.density.histogram_tables import HistogramTables
+from gapmoe.param_types import ParamType
 from gapmoe.priors.cmd import _CmdGalacticModel
 from gapmoe.priors.galactic import _ParameterizedNumpyEngine
 from gapmoe.priors.high_level import GalaxyModel as SourceAwareGalaxyModel, IsochroneModel
 from gapmoe.priors.galactic_jax import _ParameterizedJaxEngine
+from gapmoe.priors.parameterized import ParameterizedGalaxyModel
 from gapmoe.priors.source import EventPrior5D, SourceCmdPrior
 from gapmoe.source_selection import CmdCoordinates, CmdPriorTable
 
@@ -66,6 +69,121 @@ def test_distance_marginalized_theta_mu_density_is_finite(histogram_density: His
     assert isfinite(log_density_theta_mu)
 
 
+def test_analytic_theta_mu_integral_returns_weighted_physical_draw(
+    histogram_density: HistogramDensity,
+) -> None:
+    event_prior = SimpleNamespace(
+        density=histogram_density,
+        include_event_rate=False,
+    )
+
+    def log_density(physical, *, magnitudes=None, context=None):
+        del magnitudes, context
+        return histogram_density.log_density(*physical)
+
+    galaxy = SimpleNamespace(
+        density=histogram_density,
+        _selected_prior=event_prior,
+        _conditional_prior=event_prior,
+        log_density=log_density,
+    )
+    prior = ParameterizedGalaxyModel(
+        galaxy,
+        ParamType(parallax=False),
+        direction_samples=64,
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005))
+    context = {"thS": 0.005}
+
+    expected = prior.log_density(theta, context=context)
+    evaluate = pytest.importorskip("jax").jit(
+        lambda current_theta, uniforms: prior.log_density_and_physical(
+            current_theta,
+            context=context,
+            uniforms=uniforms,
+        )
+    )
+    value, draw = evaluate(theta, np.asarray((0.37, 0.73)))
+
+    assert value == pytest.approx(expected)
+    assert 0.0 < draw["DL"] < draw["DS"]
+    assert draw["ML"] > 0.0
+    assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+
+
+def test_analytic_direction_integral_returns_weighted_physical_draw(
+    histogram_density: HistogramDensity,
+) -> None:
+    event_prior = SimpleNamespace(
+        density=histogram_density,
+        include_event_rate=False,
+    )
+
+    def log_density(physical, *, magnitudes=None, context=None):
+        del magnitudes, context
+        return histogram_density.log_density(*physical)
+
+    galaxy = SimpleNamespace(
+        density=histogram_density,
+        _selected_prior=event_prior,
+        _conditional_prior=event_prior,
+        log_density=log_density,
+    )
+    prior = ParameterizedGalaxyModel(
+        galaxy,
+        ParamType(parallax=False, distance="sample"),
+        direction_samples=64,
+    )
+    theta = np.asarray((8000.0, 50.0, 0.1, 0.005, 0.26, 0.6))
+    context = {"thS": 0.005}
+
+    expected = prior.log_density(theta, context=context)
+    value, draw = prior.log_density_and_physical(
+        theta,
+        context=context,
+        uniforms=(0.37, 0.73),
+    )
+
+    assert value == pytest.approx(expected)
+    assert draw["DL"] == pytest.approx(0.26)
+    assert draw["DS"] == pytest.approx(0.6)
+    assert np.hypot(draw["mu_N"], draw["mu_E"]) == pytest.approx(draw["mu"])
+
+
+def test_histogram_direction_inverse_cdf_matches_density(
+    histogram_density: HistogramDensity,
+) -> None:
+    jax = pytest.importorskip("jax")
+    dl, ds, mu = 0.26, 0.6, POINT_MU_PHI[3]
+    group_weights = histogram_density.distance.source_group_weights(ds)
+    phi_grid = np.linspace(-np.pi, np.pi, 4097)
+    density = np.asarray(
+        jax.vmap(
+            lambda phi: histogram_density.murel.densities(
+                dl, ds, mu, phi, group_weights
+            )[1]
+        )(phi_grid)
+    )
+    norm = np.trapezoid(density, phi_grid)
+    expected = np.trapezoid(
+        np.exp(1j * phi_grid) * density,
+        phi_grid,
+    ) / norm
+
+    uniforms = (np.arange(4096) + 0.5) / 4096.0
+    draws = np.asarray(
+        jax.vmap(
+            lambda uniform: histogram_density.murel.sample_phi(
+                dl, ds, uniform, group_weights
+            )
+        )(uniforms)
+    )
+    measured = np.mean(np.exp(1j * draws))
+
+    assert measured.real == pytest.approx(expected.real, abs=2.0e-3)
+    assert measured.imag == pytest.approx(expected.imag, abs=2.0e-3)
+
+
 def test_histogram_jits(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     ml, dl, ds, mu_n, mu_e = raw_point()
@@ -80,6 +198,23 @@ def test_histogram_jits(histogram_density: HistogramDensity) -> None:
     assert jax_log_prob == pytest.approx(numpy_log_prob, rel=1e-5, abs=1e-5)
     assert jit_log_density == pytest.approx(float(histogram_density.log_density(ml, dl, ds, mu_n, mu_e)), rel=1e-5, abs=1e-5)
     assert jit_log_prob == pytest.approx(numpy_log_prob, rel=1e-5, abs=1e-5)
+
+
+def test_histogram_jax_gradients_are_finite(histogram_density: HistogramDensity) -> None:
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    jax_prior = _ParameterizedJaxEngine(histogram_density)
+    theta = jnp.asarray(raw_point())
+
+    def log_prob(current_theta):
+        return jax_prior.log_prob(*current_theta)
+
+    value = log_prob(theta)
+    gradient = jax.grad(log_prob)(theta)
+
+    assert jnp.isfinite(value)
+    assert jnp.all(jnp.isfinite(gradient))
 
 
 def test_jax_cmd_joint_density_matches_numpy_and_jits(histogram_density: HistogramDensity) -> None:
