@@ -1,7 +1,6 @@
 """gapmoe public API."""
 
 __all__ = [
-    "Flow",
     "Histogram",
     "Isochrone",
     "Model",
@@ -13,10 +12,9 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name in {"Flow", "Histogram", "Isochrone", "Model"}:
-        from .model import Flow, Histogram, Isochrone, Model
+    if name in {"Histogram", "Isochrone", "Model"}:
+        from .model import Histogram, Isochrone, Model
         return {
-            "Flow": Flow,
             "Histogram": Histogram,
             "Isochrone": Isochrone,
             "Model": Model,

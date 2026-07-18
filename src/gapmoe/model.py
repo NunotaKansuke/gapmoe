@@ -7,57 +7,9 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .flow_package import FlowPackage
-from .flow_releases import get_flow_release
 from .priors.high_level import GalaxyModel, IsochroneModel as Isochrone
 from .priors.parameterized import ParameterizedGalaxyModel
 from .pre_runner import PreRunResult
-
-
-@dataclass(frozen=True)
-class Flow:
-    """A trained Flow backend used to construct a physical Galaxy model."""
-
-    release: str = "rate-included-v1"
-    package: FlowPackage | None = None
-
-    def build(
-        self,
-        *,
-        source: Isochrone,
-        l: float,
-        b: float,
-        extinction: Mapping[str, float],
-        dm_rc: float | None,
-        dust_scale_height_pc: float,
-        include_event_rate: bool,
-        remnant: int,
-        binary: int,
-    ) -> GalaxyModel:
-        release = get_flow_release(self.release)
-        release.validate_sightline(l, b)
-        release.validate_model_options(remnant=remnant, binary=binary)
-        if release.event_rate_included and not include_event_rate:
-            raise ValueError(
-                f"flow release {release.name!r} is trained on the event-rate measure; "
-                "include_event_rate=False cannot remove that factor"
-            )
-        package = self.package or FlowPackage.bundled(release.name)
-        if package.manifest.release != release.name:
-            raise ValueError(
-                f"Flow package release {package.manifest.release!r} does not match "
-                f"the requested release {release.name!r}"
-            )
-        return GalaxyModel.from_flow_package(
-            package,
-            isochrone=source,
-            l_deg=float(l),
-            b_deg=float(b),
-            extinction_at_rc=extinction,
-            dm_rc=dm_rc,
-            dust_scale_height_pc=dust_scale_height_pc,
-            include_event_rate=include_event_rate,
-        )
 
 
 @dataclass(frozen=True)
@@ -159,7 +111,7 @@ class Model:
         b: float,
         source: Isochrone,
         extinction: Mapping[str, float] | None = None,
-        backend: Any | None = None,
+        backend: Histogram,
         dm_rc: float | None = None,
         dust_scale_height_pc: float = 164.0,
         include_event_rate: bool = True,
@@ -174,7 +126,6 @@ class Model:
                 reference_edges=_default_reference_edges(),
                 color_edges=_default_color_edges(),
             )
-        backend = Flow() if backend is None else backend
         build = getattr(backend, "build", None)
         if build is None:
             raise TypeError(
@@ -375,4 +326,4 @@ def _validate_prepared_model_option(
         )
 
 
-__all__ = ["Flow", "Histogram", "Isochrone", "Model"]
+__all__ = ["Histogram", "Isochrone", "Model"]
