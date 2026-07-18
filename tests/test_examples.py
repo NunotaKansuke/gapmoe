@@ -32,8 +32,7 @@ def test_pre_runner_notebook_code_compiles_and_is_clear() -> None:
 
     assert "PreRunner" in source
     assert "runner.run(" in source
-    assert "HistogramDensity.from_paths(" in source
-    assert "density.log_density(" in source
+    assert "gapmoe.Histogram.open(" in source
 
     _assert_compiles(path, code_cells)
 
@@ -43,9 +42,9 @@ def test_emcee_physical_params_notebook_code_compiles_and_is_clear() -> None:
     code_cells, source = _load_code(path)
     _assert_clean(code_cells)
 
-    assert "HistogramDensity.from_paths(" in source
-    assert "GalacticModel(density)" in source
-    assert "prior.log_prob(*theta)" in source
+    assert "gapmoe.Histogram.open(" in source
+    assert "gapmoe.Model(" in source
+    assert "physical_density.log_density(theta)" in source
     assert "genulens_out.dat" in source
     assert "genulens_weights" in source
     assert "fig = corner.corner(" in source

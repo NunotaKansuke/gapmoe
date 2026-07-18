@@ -35,6 +35,9 @@ examples = [
   "emcee",
   "matplotlib",
 ]
+docs = [
+  "sphinx",
+]
 dev = [
   "build",
   "corner",
@@ -42,6 +45,7 @@ dev = [
   "jax",
   "matplotlib",
   "pytest",
+  "sphinx",
   "twine",
 ]
 

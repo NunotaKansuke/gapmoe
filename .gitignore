@@ -9,6 +9,7 @@ __pycache__/
 .note/
 nunolog
 *.egg-info/
+docs/_build/
 
 *.o
 *.so
