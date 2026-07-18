@@ -11,7 +11,11 @@ import jax.numpy as jnp
 from jax.scipy.special import logsumexp, ndtri
 import numpy as np
 
+<<<<<<< HEAD
 from .event_rate_backend import log_event_rate_backend
+=======
+from .event_rate_backend import log_event_rate_backend, log_flow_kernel_rate_backend
+>>>>>>> codex/inference-mode-cleanup
 from .galactic import _ParameterizedNumpyEngine
 from .galactic_jax import _ParameterizedJaxEngine
 
@@ -19,6 +23,15 @@ from .galactic_jax import _ParameterizedJaxEngine
 _KAPPA = 8.1429
 
 
+<<<<<<< HEAD
+=======
+def _has_physical_sampler(density):
+    return callable(getattr(density, "sample_source_group", None)) and callable(
+        getattr(density, "_sample_kernel", None)
+    )
+
+
+>>>>>>> codex/inference-mode-cleanup
 @dataclass(frozen=True)
 class _IntegrationProposal:
     ds: Any
@@ -191,6 +204,12 @@ class _PhysicalDensityView:
         return terms, (ml, dl, ds, mu_n, mu_e)
 
     def _event_rate(self, ml, dl, ds, mu):
+<<<<<<< HEAD
+=======
+        density = self._prior.density
+        if getattr(density, "event_rate_factor_includes_lens_area", False):
+            return log_flow_kernel_rate_backend(ml, dl, ds, mu)
+>>>>>>> codex/inference-mode-cleanup
         return log_event_rate_backend(ml, dl, ds, mu)
 
 
@@ -222,10 +241,36 @@ class ParameterizedGalaxyModel:
         ):
             if isinstance(value, bool) or int(value) != value or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+<<<<<<< HEAD
         if self.source_group_integration != "exact":
             raise ValueError("histogram models support source_group_integration='exact' only")
         if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
             raise ValueError("seed must be a non-negative integer")
+=======
+        if self.source_group_integration not in {"exact", "qmc"}:
+            raise ValueError(
+                "source_group_integration must be 'exact' or 'qmc'"
+            )
+        if isinstance(self.seed, bool) or int(self.seed) != self.seed or self.seed < 0:
+            raise ValueError("seed must be a non-negative integer")
+        if self.source_group_integration == "qmc":
+            if not bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
+                raise ValueError(
+                    "source_group_integration='qmc' is available only for "
+                    "parallax-free distance-marginalized parameterizations"
+                )
+            if not callable(
+                getattr(self.galaxy.density, "log_density_source_group", None)
+            ):
+                raise TypeError(
+                    "source_group_integration='qmc' requires the Flow backend"
+                )
+        if (
+            bool(getattr(self.param_type, "uses_theta_mu_physical", False))
+            and _has_physical_sampler(self.galaxy.density)
+        ):
+            self._importance_proposal()
+>>>>>>> codex/inference-mode-cleanup
         if bool(getattr(self.param_type, "uses_theta_mu_physical", False)):
             selected = getattr(self.galaxy, "_selected_prior", None)
             conditional = getattr(self.galaxy, "_conditional_prior", None)
@@ -290,6 +335,7 @@ class ParameterizedGalaxyModel:
             tuple(self._physical_priors),
             proposal,
             direction_phi,
+<<<<<<< HEAD
             source_group_qmc=False,
         )
 
@@ -298,6 +344,36 @@ class ParameterizedGalaxyModel:
             "histogram models cannot marginalize hidden ML, DL, and DS under "
             "dynamic source conditioning; sample the distances explicitly"
         )
+=======
+            source_group_qmc=(
+                self.source_group_integration == "qmc"
+                and magnitudes is None
+                and proposal is not None
+            ),
+        )
+
+    def _importance_proposal(self):
+        if (
+            bool(getattr(self.param_type, "uses_theta_mu_physical", False))
+            and not _has_physical_sampler(self.galaxy.density)
+        ):
+            raise RuntimeError(
+                "this backend cannot importance-sample hidden ML, DL, and DS "
+                "for a parallax-free model with dynamic source conditioning. "
+                "Use the Flow backend, remove the dynamic magnitudes/physical "
+                "prior, or sample the distances explicitly."
+            )
+        if self._proposal is None:
+            self._proposal = _build_integration_proposal(
+                self.galaxy,
+                self.integration_samples,
+                self.seed,
+                with_mass=bool(
+                    getattr(self.param_type, "uses_theta_mu_physical", False)
+                ),
+            )
+        return self._proposal
+>>>>>>> codex/inference-mode-cleanup
 
     def _jax_engine(self, magnitudes=None, *, joint=False, context=None):
         return _ParameterizedJaxEngine(
@@ -830,12 +906,15 @@ __all__ = ["ParameterizedGalaxyModel"]
 
 
 def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
+<<<<<<< HEAD
     raise RuntimeError(
         "histogram models do not provide a generic hidden-variable importance proposal"
     )
 
     # Unreachable legacy proposal implementation; histogram inference uses
     # analytic table integrals instead.
+=======
+>>>>>>> codex/inference-mode-cleanup
     density = galaxy.density
     distance = np.asarray(density.distance.distance_pc, dtype=float) / 1000.0
     source = np.sum(
@@ -863,7 +942,11 @@ def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
     if not with_mass:
         return _IntegrationProposal(**common)
 
+<<<<<<< HEAD
     mass_density, mass_edges, broad_center, broad_sigma = _histogram_mass_proposal(
+=======
+    mass_density, mass_edges, broad_center, broad_sigma = _flow_mass_proposal(
+>>>>>>> codex/inference-mode-cleanup
         density, seed
     )
     mass_probability = mass_density * np.diff(mass_edges)
@@ -909,7 +992,13 @@ def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
             np.asarray(density.distance.source_by_component).shape[1]
         )
     ])
+<<<<<<< HEAD
     group_density = component_density
+=======
+    from gapmoe.density.flow_backend import SOURCE_GROUP_MATRIX_NP
+
+    group_density = component_density @ SOURCE_GROUP_MATRIX_NP.T
+>>>>>>> codex/inference-mode-cleanup
     group_probability = group_density / np.sum(
         group_density, axis=1, keepdims=True
     )
@@ -930,6 +1019,38 @@ def _build_integration_proposal(galaxy, samples, seed, *, with_mass):
     )
 
 
+<<<<<<< HEAD
+=======
+def _flow_mass_proposal(density, seed, *, proposal_samples=16384, bins=96):
+    sampler = getattr(density, "sample_source_group", None)
+    kernel_sampler = getattr(density, "_sample_kernel", None)
+    if sampler is None or kernel_sampler is None:
+        raise TypeError("mass proposal requires a physical Flow sampler")
+
+    source_key, kernel_key = jax.random.split(jax.random.key(seed))
+    source_keys = jax.random.split(source_key, proposal_samples)
+    kernel_keys = jax.random.split(kernel_key, proposal_samples)
+    ds, group = jax.vmap(sampler)(source_keys)
+    physical = jax.vmap(kernel_sampler)(kernel_keys, ds, group)
+    mass = np.asarray(physical[:, 0], dtype=float)
+    log_mass = np.log(mass[np.isfinite(mass) & (mass > 0.0)])
+    if not len(log_mass):
+        edges = np.linspace(np.log(1.0e-4), np.log(1.0e3), bins + 1)
+        histogram = np.full(bins, 1.0 / (edges[-1] - edges[0]))
+        return histogram, edges, np.log(0.3), 4.0
+
+    broad_center = float(np.median(log_mass))
+    broad_sigma = max(3.0, 3.0 * float(np.std(log_mass)))
+    lower, upper = np.quantile(log_mass, (0.001, 0.999))
+    padding = max(0.5, 0.1 * float(upper - lower))
+    edges = np.linspace(lower - padding, upper + padding, bins + 1)
+    counts, _ = np.histogram(log_mass, bins=edges)
+    density_values = counts.astype(float) + 0.5
+    density_values /= np.sum(density_values * np.diff(edges))
+    return density_values, edges, broad_center, broad_sigma
+
+
+>>>>>>> codex/inference-mode-cleanup
 def _halton_points(samples, dimensions, seed):
     primes = (2, 3, 5, 7, 11, 13)
     if dimensions > len(primes):

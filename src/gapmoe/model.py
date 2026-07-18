@@ -7,12 +7,66 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+<<<<<<< HEAD
+=======
+from .flow_package import FlowPackage
+from .flow_releases import get_flow_release
+>>>>>>> codex/inference-mode-cleanup
 from .priors.high_level import GalaxyModel, IsochroneModel as Isochrone
 from .priors.parameterized import ParameterizedGalaxyModel
 from .pre_runner import PreRunResult
 
 
 @dataclass(frozen=True)
+<<<<<<< HEAD
+=======
+class Flow:
+    """A trained Flow backend used to construct a physical Galaxy model."""
+
+    release: str = "rate-included-v1"
+    package: FlowPackage | None = None
+
+    def build(
+        self,
+        *,
+        source: Isochrone,
+        l: float,
+        b: float,
+        extinction: Mapping[str, float],
+        dm_rc: float | None,
+        dust_scale_height_pc: float,
+        include_event_rate: bool,
+        remnant: int,
+        binary: int,
+    ) -> GalaxyModel:
+        release = get_flow_release(self.release)
+        release.validate_sightline(l, b)
+        release.validate_model_options(remnant=remnant, binary=binary)
+        if release.event_rate_included and not include_event_rate:
+            raise ValueError(
+                f"flow release {release.name!r} is trained on the event-rate measure; "
+                "include_event_rate=False cannot remove that factor"
+            )
+        package = self.package or FlowPackage.bundled(release.name)
+        if package.manifest.release != release.name:
+            raise ValueError(
+                f"Flow package release {package.manifest.release!r} does not match "
+                f"the requested release {release.name!r}"
+            )
+        return GalaxyModel.from_flow_package(
+            package,
+            isochrone=source,
+            l_deg=float(l),
+            b_deg=float(b),
+            extinction_at_rc=extinction,
+            dm_rc=dm_rc,
+            dust_scale_height_pc=dust_scale_height_pc,
+            include_event_rate=include_event_rate,
+        )
+
+
+@dataclass(frozen=True)
+>>>>>>> codex/inference-mode-cleanup
 class Histogram:
     """A precomputed event-local histogram backend."""
 
@@ -111,7 +165,11 @@ class Model:
         b: float,
         source: Isochrone,
         extinction: Mapping[str, float] | None = None,
+<<<<<<< HEAD
         backend: Histogram,
+=======
+        backend: Any | None = None,
+>>>>>>> codex/inference-mode-cleanup
         dm_rc: float | None = None,
         dust_scale_height_pc: float = 164.0,
         include_event_rate: bool = True,
@@ -119,6 +177,10 @@ class Model:
         binary: int = 0,
         integration_samples: int = 512,
         direction_samples: int = 32,
+<<<<<<< HEAD
+=======
+        source_group_integration: str = "exact",
+>>>>>>> codex/inference-mode-cleanup
         seed: int = 0,
     ) -> None:
         if source.table is None:
@@ -126,6 +188,10 @@ class Model:
                 reference_edges=_default_reference_edges(),
                 color_edges=_default_color_edges(),
             )
+<<<<<<< HEAD
+=======
+        backend = Flow() if backend is None else backend
+>>>>>>> codex/inference-mode-cleanup
         build = getattr(backend, "build", None)
         if build is None:
             raise TypeError(
@@ -155,6 +221,10 @@ class Model:
             param_type,
             integration_samples=integration_samples,
             direction_samples=direction_samples,
+<<<<<<< HEAD
+=======
+            source_group_integration=source_group_integration,
+>>>>>>> codex/inference-mode-cleanup
             seed=seed,
         )
 
@@ -170,6 +240,13 @@ class Model:
     def direction_samples(self) -> int:
         return self._model.direction_samples
 
+<<<<<<< HEAD
+=======
+    @property
+    def source_group_integration(self) -> str:
+        return self._model.source_group_integration
+
+>>>>>>> codex/inference-mode-cleanup
     def prior(self, fn):
         """Add a JAX-compatible prior over physical or derived quantities."""
 
@@ -189,6 +266,26 @@ class Model:
             joint=joint,
         )
 
+<<<<<<< HEAD
+=======
+    def log_density_and_physical(
+        self,
+        theta,
+        *,
+        uniforms,
+        context=None,
+        magnitudes=None,
+        joint=False,
+    ):
+        return self._model.log_density_and_physical(
+            theta,
+            uniforms=uniforms,
+            context=context,
+            magnitudes=magnitudes,
+            joint=joint,
+        )
+
+>>>>>>> codex/inference-mode-cleanup
     def is_valid(self, theta, *, context=None):
         return self._model.is_valid(theta, context=context)
 
@@ -326,4 +423,8 @@ def _validate_prepared_model_option(
         )
 
 
+<<<<<<< HEAD
 __all__ = ["Histogram", "Isochrone", "Model"]
+=======
+__all__ = ["Flow", "Histogram", "Isochrone", "Model"]
+>>>>>>> codex/inference-mode-cleanup

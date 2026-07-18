@@ -69,6 +69,11 @@ def test_pre_runner_can_use_genulens_python_api(monkeypatch, tmp_path: Path) -> 
         rho_step_pc=500,
         murel_distance_step_pc=500,
         n_simu=100,
+<<<<<<< HEAD
+=======
+        remnant=1,
+        binary=1,
+>>>>>>> codex/inference-mode-cleanup
         source_model=GenulensSourceModel(source_data=SourceSelection()),
         cmd_prior=cmd_prior,
     )
@@ -80,6 +85,11 @@ def test_pre_runner_can_use_genulens_python_api(monkeypatch, tmp_path: Path) -> 
     assert calls[1][1]["SOURCE"] == 0
     assert calls[2][1]["GRID"] == 1
     assert calls[2][1]["SOURCEGROUPS"] == 1
+<<<<<<< HEAD
+=======
+    assert calls[0][1]["REMNANT"] == 1
+    assert calls[0][1]["BINARY"] == 1
+>>>>>>> codex/inference-mode-cleanup
     assert result.source_evidence_path is not None
     assert SourceEvidenceGrid.load_npz(result.source_evidence_path).evidence_by_component.shape == (1, 11)
     assert result.cmd_prior_path is not None

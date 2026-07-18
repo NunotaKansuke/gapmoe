@@ -6,7 +6,11 @@ from typing import Any, Callable, Mapping, NamedTuple
 import jax.numpy as jnp
 from jax import vmap
 
+<<<<<<< HEAD
 from gapmoe.priors.event_rate_backend import log_event_rate_backend
+=======
+from gapmoe.priors.event_rate_backend import log_event_rate_backend, log_flow_kernel_rate_backend
+>>>>>>> codex/inference-mode-cleanup
 
 
 Context = Mapping[str, Any] | None
@@ -255,7 +259,16 @@ class EventPrior5D:
             )
             value = joint - self.source_prior.log_marginal_density(reference_magnitude, color, context=context)
         if self.include_event_rate and not getattr(self.density, "event_rate_included", False):
+<<<<<<< HEAD
             value = value + log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+=======
+            rate = (
+                log_flow_kernel_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+                if getattr(self.density, "event_rate_factor_includes_lens_area", False)
+                else log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+            )
+            value = value + rate
+>>>>>>> codex/inference-mode-cleanup
         return value
 
     def log_joint_density(
@@ -298,5 +311,14 @@ class EventPrior5D:
             source_component_factor=source_component_factor,
         )
         if self.include_event_rate and not getattr(self.density, "event_rate_included", False):
+<<<<<<< HEAD
             value = value + log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+=======
+            rate = (
+                log_flow_kernel_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+                if getattr(self.density, "event_rate_factor_includes_lens_area", False)
+                else log_event_rate_backend(ml, dl, ds, jnp.hypot(mu_n, mu_e))
+            )
+            value = value + rate
+>>>>>>> codex/inference-mode-cleanup
         return value

@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+<<<<<<< HEAD
+=======
+import jax
+import jax.numpy as jnp
+>>>>>>> codex/inference-mode-cleanup
 
 from gapmoe.source_selection import (
     CmdCoordinates,
@@ -21,7 +26,15 @@ from gapmoe.source_selection import (
     SourceSelection,
 )
 from gapmoe.pre_runner import PreRunResult, PreRunner
+<<<<<<< HEAD
 from .source import EventPrior5D, SourceCmdPrior
+=======
+from gapmoe.flow_releases import FlowRelease, get_flow_release
+from gapmoe.flow_package import FlowPackage
+
+from .source import EventPrior5D, SourceCmdPrior
+from .event_rate_backend import log_flow_kernel_rate_backend
+>>>>>>> codex/inference-mode-cleanup
 
 
 Context = Mapping[str, Any] | None
@@ -155,6 +168,46 @@ class GalaxyModel:
             include_event_rate=include_event_rate,
         )
 
+<<<<<<< HEAD
+=======
+    @classmethod
+    def from_flow_package(
+        cls,
+        package: FlowPackage,
+        *,
+        isochrone: IsochroneModel,
+        l_deg: float,
+        b_deg: float,
+        extinction_at_rc: Mapping[str, float],
+        dm_rc: float | None = None,
+        dust_scale_height_pc: float = 164.0,
+        include_event_rate: bool = True,
+    ) -> "GalaxyModel":
+        """Create a source-aware model from a trained Flow release."""
+
+        from gapmoe.density import EventKernelFlow, FlowDensity
+        from gapmoe.flow_source_grid import FlowSourceDistanceGrid
+
+        source_density = FlowSourceDistanceGrid.load_npz(package.source_distance_grid_path).at(l_deg, b_deg)
+        density = FlowDensity(
+            kernel=EventKernelFlow.load(package.event_kernel_path),
+            distance=source_density.distance,
+            l_deg=float(l_deg),
+            b_deg=float(b_deg),
+            event_rate_included=package.manifest.event_rate_included,
+        )
+        return cls(
+            density=density,
+            isochrone=isochrone,
+            l_deg=float(l_deg),
+            b_deg=float(b_deg),
+            extinction_at_rc=extinction_at_rc,
+            dm_rc=dm_rc,
+            dust_scale_height_pc=dust_scale_height_pc,
+            include_event_rate=include_event_rate,
+        )
+
+>>>>>>> codex/inference-mode-cleanup
     def __post_init__(self) -> None:
         if self.isochrone.table is None:
             raise ValueError("isochrone must be built before constructing GalaxyModel")
@@ -297,6 +350,90 @@ class GalaxyModel:
             context=context,
         )
 
+<<<<<<< HEAD
+=======
+    def sample_kernel(self, key: Any, *, ds: Any, source_group: int):
+        """Sample the Flow lens kernel at fixed DS and source group.
+
+        The returned order is ``(ML, DL, DS, mu_N, mu_E)``. This method is
+        available only for Flow-backed models and samples the base Galactic
+        kernel. For a rate-included release this is already conditional on
+        the event-rate measure; for the default release it is the base kernel
+        before applying the remaining event-rate factor.
+        """
+
+        sampler = getattr(self.density, "sample_kernel", None)
+        if sampler is None:
+            raise TypeError("sample_kernel is available only for Flow-backed models")
+        return sampler(key, ds, source_group)
+
+    def sample(
+        self,
+        key: Any,
+        magnitudes: Mapping[str, Any] | None = None,
+        *,
+        context: Context = None,
+        num_proposals: int = 256,
+    ):
+        """Sample ``(ML, DL, DS, mu_N, mu_E)`` from a Flow-backed prior.
+
+        Source distance and source group are drawn from the configured hard
+        selection, or from the supplied apparent magnitudes.  With event-rate
+        weighting enabled, a small importance-resampling population is used
+        to draw from the same event-rate-weighted density as ``log_density``.
+        A rate-included release draws directly because both its source grid
+        and conditional kernel already use that measure.
+        """
+
+        if not isinstance(num_proposals, int) or num_proposals < 1:
+            raise ValueError("num_proposals must be a positive integer")
+        if magnitudes is None:
+            sampling_prior = self._selected_prior
+            component_weights = sampling_prior.density.distance.source_by_component
+        else:
+            sampling_prior = self._conditional_prior
+            component_weights = self._component_weights_for_magnitudes(magnitudes, context=context)
+        source_sampler = getattr(sampling_prior.density, "sample_source_group", None)
+        kernel_sampler = getattr(sampling_prior.density, "_sample_kernel", None)
+        if source_sampler is None or kernel_sampler is None:
+            raise TypeError("sample is available only for Flow-backed models")
+
+        rate_already_included = getattr(sampling_prior.density, "event_rate_included", False)
+        n_candidates = num_proposals if self.include_event_rate and not rate_already_included else 1
+        source_key, kernel_key, choose_key = jax.random.split(jnp.asarray(key), 3)
+        source_keys = jax.random.split(source_key, n_candidates)
+        kernel_keys = jax.random.split(kernel_key, n_candidates)
+        ds, source_group = jax.vmap(
+            lambda sample_key: source_sampler(sample_key, component_weights)
+        )(source_keys)
+        candidates = jax.vmap(kernel_sampler)(kernel_keys, ds, source_group)
+        if not self.include_event_rate or rate_already_included:
+            return candidates[0]
+        log_weights = log_flow_kernel_rate_backend(
+            candidates[:, 0],
+            candidates[:, 1],
+            candidates[:, 2],
+            jnp.hypot(candidates[:, 3], candidates[:, 4]),
+        )
+        return candidates[jax.random.categorical(choose_key, log_weights)]
+
+    def _component_weights_for_magnitudes(
+        self,
+        magnitudes: Mapping[str, Any],
+        *,
+        context: Context,
+    ):
+        reference_magnitude, color = self.isochrone.values_from_magnitudes(magnitudes)
+        source_prior = self._conditional_prior.source_prior
+        distance_kpc = self._conditional_prior.density.distance.distance_pc / 1000.0
+        offsets = jax.vmap(lambda ds: source_prior.offset_calculator(ds, context))(distance_kpc)
+        photometric = jax.vmap(
+            lambda offset: source_prior.cmd_prior.density_all_components(reference_magnitude, color, offset)
+        )(offsets)
+        return self._conditional_prior.density.distance.source_by_component * photometric
+
+
+>>>>>>> codex/inference-mode-cleanup
 class Workspace:
     """Internal workspace for preparing event-local histogram artifacts.
 
@@ -318,12 +455,22 @@ class Workspace:
         self._genulens_root = genulens_root
         self._auto_build = auto_build
         self._backend = backend
+<<<<<<< HEAD
+=======
+        # A bundled Flow does not need a local genulens checkout.  Keep the
+        # legacy runner eager only when its location was explicitly supplied.
+>>>>>>> codex/inference-mode-cleanup
         self._runner = self._new_runner() if genulens_root is not None else None
         self.directory: Path | None = None
         self._settings: dict[str, Any] = {"dust_scale_height_pc": 164.0, "remnant": 0, "binary": 0}
         self._explicit_settings: set[str] = set()
         self._prepare_options: dict[str, Any] = {}
         self._prepared: PreRunResult | None = None
+<<<<<<< HEAD
+=======
+        self._flow_release: FlowRelease | None = None
+        self._flow_package: FlowPackage | None = None
+>>>>>>> codex/inference-mode-cleanup
 
     def _new_runner(self) -> PreRunner:
         return PreRunner(
@@ -363,6 +510,15 @@ class Workspace:
         if "extinction" in settings and ("ai_rc" in settings or "evi_rc" in settings):
             raise ValueError("use either extinction or ai_rc/evi_rc, not both")
 
+<<<<<<< HEAD
+=======
+        candidate = {**self._settings, **settings}
+        if self._flow_release is not None and "l" in candidate and "b" in candidate:
+            self._flow_release.validate_sightline(candidate["l"], candidate["b"])
+            self._flow_release.validate_model_options(
+                remnant=candidate["remnant"], binary=candidate["binary"]
+            )
+>>>>>>> codex/inference-mode-cleanup
         precompute_changed = any(
             name in settings and settings[name] != self._settings.get(name) for name in ("l", "b", "remnant", "binary")
         )
@@ -372,9 +528,31 @@ class Workspace:
             self._prepared = None
         return self
 
+<<<<<<< HEAD
     def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Workspace":
         """Create or reuse raw pre-gapmoe artifacts for the configured sightline."""
 
+=======
+    def set_flow(self, *, release: str = "rate-included-v1") -> "Workspace":
+        """Select a bundled trained flow release for the current sightline."""
+
+        if "l" not in self._settings or "b" not in self._settings:
+            raise ValueError("set l and b before set_flow()")
+        flow_release = get_flow_release(release)
+        flow_release.validate_sightline(self._settings["l"], self._settings["b"])
+        flow_release.validate_model_options(
+            remnant=self._settings["remnant"], binary=self._settings["binary"]
+        )
+        self._flow_release = flow_release
+        self._flow_package = None
+        return self
+
+    def prepare(self, directory: str | Path, *, force: bool = False, **options: Any) -> "Workspace":
+        """Create or reuse raw pre-gapmoe artifacts for the configured sightline."""
+
+        if self._flow_release is not None:
+            raise RuntimeError("set_flow() selects a pre-trained backend; do not call prepare()")
+>>>>>>> codex/inference-mode-cleanup
         self.directory = Path(directory).expanduser().resolve()
         if not force:
             cached = self._load_prepared_directory(self.directory)
@@ -472,6 +650,31 @@ class Workspace:
     def galactic_model(self, isochrone: IsochroneModel, *, include_event_rate: bool = True) -> GalaxyModel:
         """Return the five-dimensional event prior for an isochrone model."""
 
+<<<<<<< HEAD
+=======
+        if self._flow_release is not None:
+            self._flow_release.validate_sightline(self._settings["l"], self._settings["b"])
+            self._flow_release.validate_model_options(
+                remnant=self._settings["remnant"], binary=self._settings["binary"]
+            )
+            if self._flow_release.event_rate_included and not include_event_rate:
+                raise ValueError(
+                    f"flow release {self._flow_release.name!r} is trained on the event-rate measure; "
+                    "include_event_rate=False cannot remove that factor"
+                )
+            if self._flow_package is None:
+                self._flow_package = FlowPackage.bundled(self._flow_release.name)
+            return GalaxyModel.from_flow_package(
+                self._flow_package,
+                isochrone=isochrone,
+                l_deg=self._settings["l"],
+                b_deg=self._settings["b"],
+                extinction_at_rc=self._extinction_for(isochrone),
+                dm_rc=self._settings.get("dm_rc"),
+                dust_scale_height_pc=self._settings["dust_scale_height_pc"],
+                include_event_rate=include_event_rate,
+            )
+>>>>>>> codex/inference-mode-cleanup
         if self._prepared is None:
             raise RuntimeError("call prepare() before galactic_model()")
         return GalaxyModel.from_pre_run(

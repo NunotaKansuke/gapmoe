@@ -1,0 +1,53 @@
+{
+  "schema": "gapmoe-flow-v1",
+  "release": "default",
+  "coverage_deg": {
+    "l": [-5.0, 5.0],
+    "b": [-6.0, -2.0],
+    "grid_step": 0.5
+  },
+  "model_options": {
+    "remnant": 0,
+    "binary": 0
+  },
+  "training_target": "p(ML, DL, mu_E, mu_N | DS, source_group, l, b); the kernel retains DL^2 and GalacticModel applies thetaE * mu",
+  "source_measure": "genulens unselected source proposal nMS * sqrt(DS / 8000) * 1e-3 times the integrated DL^2-weighted total lens-number-density column to DS (gammaDs=0.5); CMD selection is applied at inference",
+  "event_kernel": "event_kernel",
+  "source_distance_grid": "source_distance_grid.npz",
+  "cmd_prior": null,
+  "validation": {
+    "normal_midpoint_holdout": {
+      "cells": 27,
+      "samples_per_cell": 1000,
+      "ks_median": {
+        "ML": 0.046,
+        "DL": 0.044,
+        "mu_E": 0.051,
+        "mu_N": 0.049
+      },
+      "ks_max": 0.110
+    },
+    "nsd_midpoint_holdout": {
+      "cells": 4,
+      "samples_per_cell": 5000,
+      "ks_mean": {
+        "ML": 0.029,
+        "DL": 0.026,
+        "mu_E": 0.020,
+        "mu_N": 0.015
+      },
+      "ks_max": 0.044
+    },
+    "halo_midpoint_holdout": {
+      "cells": 4,
+      "samples_per_cell": 5000,
+      "ks_mean": {
+        "ML": 0.037,
+        "DL": 0.033,
+        "mu_E": 0.020,
+        "mu_N": 0.017
+      },
+      "ks_max": 0.046
+    }
+  }
+}
