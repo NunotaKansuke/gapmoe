@@ -74,6 +74,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from gapmoe.orbit._kepler_core import (
+    apply_orientation as _apply_orientation,
+    solve_kepler as _solve_kepler,
+)
 from gapmoe.param_types.binary_lens import (
     _G,
     _KAPPA,
@@ -192,16 +196,6 @@ def _context_scalars(fixed: Mapping[str, float], context: Mapping[str, Any]):
     return thS, vEarth, thE, piE, ML, GM, DL_max
 
 
-def _solve_kepler(M: np.ndarray, e: np.ndarray, n_iter: int = 40) -> np.ndarray:
-    """Vectorized Newton solve of E - e*sin(E) = M."""
-    E = M + e * np.sin(M)
-    for _ in range(n_iter):
-        f = E - e * np.sin(E) - M
-        fp = 1.0 - e * np.cos(E)
-        E = E - f / fp
-    return E
-
-
 def _rot_and_align(r1: np.ndarray, v1: np.ndarray):
     """Rotate about the line of sight so the projected separation is +x.
 
@@ -218,21 +212,6 @@ def _rot_and_align(r1: np.ndarray, v1: np.ndarray):
     v2[:, 1] = -s * v1[:, 0] + c * v1[:, 1]
     v2[:, 2] = v1[:, 2]
     return r2, v2
-
-
-def _apply_orientation(u_pf: np.ndarray, om: np.ndarray, cos_i: np.ndarray):
-    """R_x(i) @ R_z(om) applied to perifocal vectors u_pf (m, 3)."""
-    co, so = np.cos(om), np.sin(om)
-    x = co * u_pf[:, 0] - so * u_pf[:, 1]
-    y = so * u_pf[:, 0] + co * u_pf[:, 1]
-    z = u_pf[:, 2]
-    ci = cos_i
-    si = np.sqrt(np.clip(1.0 - ci**2, 0.0, 1.0))
-    out = np.empty_like(u_pf)
-    out[:, 0] = x
-    out[:, 1] = ci * y - si * z
-    out[:, 2] = si * y + ci * z
-    return out
 
 
 _DEFAULT_DL_FRAC_RANGE = (0.02, 0.98)
