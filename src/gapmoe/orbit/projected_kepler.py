@@ -188,6 +188,7 @@ def forward(
     xp=np,
     n_iter: int = 40,
     consistency_tol: Optional[float] = None,
+    strict: bool = True,
 ) -> OrbitalTransformResult:
     """PSK -> old Kepler elements -> frame-T state vector.
 
@@ -196,6 +197,21 @@ def forward(
     -compatible path (used by P2's analytic-vs-AD Jacobian checks); the
     numpy path is the default and is what the ``PSK_conventions.md`` worked
     example (Roman fixture, 12-digit round trip) was verified against.
+
+    ``strict`` (default ``True``) selects how a genuine self-consistency
+    violation (plan section 4.3: ``a_s = 1/(1-e*cos E)`` vs ``a/|r|``) is
+    reported. In debug/test usage (the default) this must be a hard failure,
+    not a silently-downgraded flag -- so on the eager numpy path a violation
+    at an otherwise-``valid`` point raises ``RuntimeError`` as before. That
+    behavior is impossible to keep under ``xp=jax.numpy`` (Python-level
+    branching on traced values is illegal under jit/vmap/grad) and is
+    unfriendly to production numpy batch processing (one bad point would
+    abort an entire batch). Passing ``strict=False`` selects the
+    production-path design instead: no path ever raises, and points whose
+    consistency error exceeds ``tol`` are folded into ``valid=False`` (for
+    both the numpy and JAX array modules alike), so callers doing
+    vectorized/JAX inference get a uniform invalid-mask contract rather than
+    an unhandled violation.
     """
     log_s = xp.asarray(state.log_s)
     h = xp.asarray(state.h)
@@ -265,20 +281,26 @@ def forward(
 
     valid = (e < _E_DOMAIN_MAX) & (xp.abs(Xi) > _G_PROJ_SINGULARITY_EPS)
 
-    if xp is np:
-        tol = consistency_tol if consistency_tol is not None else _default_consistency_tol(e, xp)
-        bad = valid & (consistency_error > tol)
-        if np.any(bad):
-            idx = np.flatnonzero(np.atleast_1d(bad))
-            raise RuntimeError(
-                "PSK forward transform: a_s = 1/(1-e*cos E) disagrees with "
-                f"a/|r| beyond tolerance {tol:g} at {idx.size} point(s) "
-                f"(first index {int(idx[0])}, error "
-                f"{float(np.atleast_1d(consistency_error)[idx[0]]):g}). This is "
-                "a self-consistency failure in the transform, not an invalid "
-                "input -- per plan section 4.3 it must raise, not silently "
-                "flag invalid."
-            )
+    tol = consistency_tol if consistency_tol is not None else _default_consistency_tol(e, xp)
+
+    if strict:
+        if xp is np:
+            bad = valid & (consistency_error > tol)
+            if np.any(bad):
+                idx = np.flatnonzero(np.atleast_1d(bad))
+                raise RuntimeError(
+                    "PSK forward transform: a_s = 1/(1-e*cos E) disagrees with "
+                    f"a/|r| beyond tolerance {tol:g} at {idx.size} point(s) "
+                    f"(first index {int(idx[0])}, error "
+                    f"{float(np.atleast_1d(consistency_error)[idx[0]]):g}). This is "
+                    "a self-consistency failure in the transform, not an invalid "
+                    "input -- per plan section 4.3 it must raise, not silently "
+                    "flag invalid."
+                )
+        # xp is not np: raising on traced values is impossible; strict mode
+        # simply has no enforcement on the JAX path (documented above).
+    else:
+        valid = valid & (consistency_error <= tol)
 
     i_angle = xp.arccos(xp.clip(cos_i, -1.0, 1.0))
     zeros = xp.zeros_like(e)
