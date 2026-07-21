@@ -35,7 +35,7 @@ class _FakeForwardSourceQuery:
         self.component_index = -1
         self.distance_pc = 0.0
         self.min_initial_mass_msun = 0.0
-        self.max_initial_mass_msun = 0.0
+        self.max_initial_mass_msun = float("inf")
         self.use_default_log_age = True
         self.log_age = 0.0
         self.use_default_metallicity = True
@@ -289,6 +289,8 @@ def test_genulens_cmd_builder_creates_a_component_cmd_prior(tmp_path: Path) -> N
     assert np.sum(table.density_by_component[0] * 2.25) == pytest.approx(1.0)
     assert loaded.coordinates == table.coordinates
     assert np.allclose(loaded.density_by_component, table.density_by_component)
+    # The generic CMD builder must not reintroduce the historical 1 Msun cap.
+    assert table.metadata["max_initial_mass_msun"] is None
 
 
 def test_genulens_builder_samples_color_selection_when_needed() -> None:

@@ -253,7 +253,10 @@ class GenulensSourceModel:
     isochrone_table_path: str | None = None
     offset_provider: OffsetProvider | None = None
     min_initial_mass_msun: float = 0.09
-    max_initial_mass_msun: float = 1.0
+    # None delegates the upper limit to genulens, which intersects the IMF
+    # with the selected age/metallicity isochrone support.  A fixed 1 Msun
+    # cap removes the turn-off and giant branch of old populations.
+    max_initial_mass_msun: float | None = None
     # CMD likelihoods for a precise source can be dominated by short-lived
     # post-main-sequence phases.  A random IMF draw represents those phases
     # with one or zero rows, then histogram smoothing can turn that accident
@@ -954,7 +957,7 @@ class GenulensCmdPriorBuilder:
     population_points_provider: PopulationPointProvider | None = None
     population_component_mapper: PopulationComponentMapper = genulens_population_component
     min_initial_mass_msun: float = 0.09
-    max_initial_mass_msun: float = 1.0
+    max_initial_mass_msun: float | None = None
     imf_quadrature_points: int = 8192
     samples_per_population_point: int = 4096
 
@@ -1046,7 +1049,8 @@ class GenulensCmdPriorBuilder:
         query.component_index = self.population_component_mapper(component)
         query.distance_pc = 10.0
         query.min_initial_mass_msun = self.min_initial_mass_msun
-        query.max_initial_mass_msun = self.max_initial_mass_msun
+        if self.max_initial_mass_msun is not None:
+            query.max_initial_mass_msun = self.max_initial_mass_msun
         query.use_default_log_age = False
         query.log_age = point.log_age
         query.use_default_metallicity = False
@@ -1081,7 +1085,7 @@ class GenulensSourceEvidenceBuilder:
     population_points_provider: PopulationPointProvider | None = None
     population_component_mapper: PopulationComponentMapper = genulens_population_component
     min_initial_mass_msun: float = 0.09
-    max_initial_mass_msun: float = 1.0
+    max_initial_mass_msun: float | None = None
     samples_per_population_point: int = 4096
 
     @classmethod
@@ -1155,7 +1159,8 @@ class GenulensSourceEvidenceBuilder:
         query.component_index = self.population_component_mapper(component)
         query.distance_pc = distance_pc
         query.min_initial_mass_msun = self.min_initial_mass_msun
-        query.max_initial_mass_msun = self.max_initial_mass_msun
+        if self.max_initial_mass_msun is not None:
+            query.max_initial_mass_msun = self.max_initial_mass_msun
         query.use_default_log_age = False
         query.log_age = point.log_age
         query.use_default_metallicity = False
