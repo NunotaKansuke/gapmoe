@@ -799,12 +799,27 @@ class CmdPriorTable:
             metadata=metadata,
         )
 
-    def evaluator(self):
-        """Return the canonical histogram-backend representation of this CMD table."""
+    def evaluator(
+        self,
+        *,
+        interpolation: str = "bilinear",
+        log_cubic_floor_relative: float = 1.0e-12,
+        log_cubic_padding_cells: int = 3,
+    ):
+        """Return the canonical histogram-backend representation of this CMD table.
+
+        ``log_cubic`` is a finite, C1 interpolation of log CMD density for
+        gradient-based inference; ``bilinear`` preserves legacy behaviour.
+        """
 
         from gapmoe.density.histogram_backend import CmdPriorEvaluator
 
-        return CmdPriorEvaluator.from_table(self)
+        return CmdPriorEvaluator.from_table(
+            self,
+            interpolation=interpolation,
+            log_cubic_floor_relative=log_cubic_floor_relative,
+            log_cubic_padding_cells=log_cubic_padding_cells,
+        )
 
     def evidence_for_selection(
         self,

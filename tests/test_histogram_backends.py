@@ -246,10 +246,65 @@ def test_jax_cmd_joint_density_matches_numpy_and_jits(histogram_density: Histogr
     assert jitted == pytest.approx(value, rel=1e-5, abs=1e-5)
 
 
+def test_log_cubic_cmd_interpolation_is_finite_and_differentiable_through_empty_pixels() -> None:
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    # A deliberately sparse CMD: this is the case where direct interpolation
+    # creates zero-probability pixels and makes HMC's potential non-smooth.
+    density = np.zeros((11, 5, 5))
+    density[:, 1, 1] = 1.0
+    density[:, 3, 3] = 0.3
+    table = CmdPriorTable(
+        coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
+        reference_edges=np.arange(6.0),
+        color_edges=np.arange(6.0),
+        density_by_component=density,
+    )
+    evaluator = table.evaluator(interpolation="log_cubic")
+
+    def log_density(reference, color):
+        value = evaluator.density_all_components(reference, color, jnp.zeros(3))[0]
+        return jnp.log(value)
+
+    # Includes an empty pixel and points beyond the original histogram support.
+    for reference, color in ((2.5, 2.5), (-3.0, 2.0), (7.0, 7.0)):
+        value, gradient = jax.value_and_grad(lambda xy: log_density(xy[0], xy[1]))(
+            jnp.asarray([reference, color])
+        )
+        assert jnp.isfinite(value)
+        assert jnp.all(jnp.isfinite(gradient))
+
+    # The spline joins adjacent cells with the same derivative at their shared
+    # centre.  This is the property NUTS needs, unlike bilinear interpolation.
+    left = jax.grad(lambda x: log_density(x, 2.2))(jnp.asarray(2.0 - 1.0e-4))
+    right = jax.grad(lambda x: log_density(x, 2.2))(jnp.asarray(2.0 + 1.0e-4))
+    assert float(left) == pytest.approx(float(right), abs=2.0e-3)
+
+
+def test_high_level_model_exposes_log_cubic_cmd_interpolation(histogram_density: HistogramDensity) -> None:
+    table = CmdPriorTable(
+        coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),
+        reference_edges=np.linspace(-12.0, 12.0, 9),
+        color_edges=np.linspace(-2.0, 4.0, 9),
+        density_by_component=np.ones((11, 8, 8)),
+    )
+    model = SourceAwareGalaxyModel(
+        density=histogram_density,
+        isochrone=IsochroneModel(
+            "Imag", ("Vmag", "Imag"), table=table, cmd_interpolation="log_cubic"
+        ),
+        l_deg=1.0,
+        b_deg=-3.9,
+        extinction_at_rc={},
+        include_event_rate=False,
+    )
+    assert np.isfinite(float(model.log_density(raw_point(), magnitudes={"Imag": 0.5, "Vmag": 1.0})))
+
+
 def test_cmd_galactic_model_extracts_source_photometry_from_mcmc_state(histogram_density: HistogramDensity) -> None:
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp
-    from gapmoe.density.histogram_backend import CmdPriorEvaluator
 
     cmd_prior = CmdPriorTable(
         coordinates=CmdCoordinates(reference_band="Imag", blue_band="Vmag", red_band="Imag"),

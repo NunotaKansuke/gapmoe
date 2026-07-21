@@ -138,7 +138,14 @@ class DistanceDensityTable:
 
 @dataclass(frozen=True)
 class CmdPriorEvaluator:
-    """JAX representation of a component-conditional intrinsic CMD table."""
+    """JAX representation of a component-conditional intrinsic CMD table.
+
+    ``interpolation='bilinear'`` is the historical, exactly local evaluator.
+    ``interpolation='log_cubic'`` evaluates a C1 cubic-convolution spline of
+    ``log(density)``.  The latter is intended for gradient-based samplers: a
+    small, configurable density floor and a padded table avoid the zero-probability
+    pixels and hard table boundaries of a sparse CMD histogram.
+    """
 
     reference_centers: jnp.ndarray
     color_centers: jnp.ndarray
@@ -146,9 +153,37 @@ class CmdPriorEvaluator:
     log_radius_moment_by_component: jnp.ndarray
     log_radius_square_moment_by_component: jnp.ndarray
     component_to_column: jnp.ndarray
+    interpolation: Literal["bilinear", "log_cubic"] = "bilinear"
+    smooth_log_density_by_component: jnp.ndarray | None = None
+    smooth_active_by_component: jnp.ndarray | None = None
+    smooth_reference_origin: float = 0.0
+    smooth_color_origin: float = 0.0
+    smooth_reference_step: float = 1.0
+    smooth_color_step: float = 1.0
 
     @classmethod
-    def from_table(cls, table: CmdPriorTable, *, n_components: int = 11) -> "CmdPriorEvaluator":
+    def from_table(
+        cls,
+        table: CmdPriorTable,
+        *,
+        n_components: int = 11,
+        interpolation: Literal["bilinear", "log_cubic"] = "bilinear",
+        log_cubic_floor_relative: float = 1.0e-12,
+        log_cubic_padding_cells: int = 3,
+    ) -> "CmdPriorEvaluator":
+        """Create a JAX CMD evaluator.
+
+        The smooth mode deliberately operates on a regular CMD grid.  It pads
+        the log-density table with its floor before interpolation, so its tails
+        are finite and flat instead of introducing a non-differentiable hard
+        support boundary.  The floor is relative to each component's peak.
+        """
+        if interpolation not in {"bilinear", "log_cubic"}:
+            raise ValueError("interpolation must be 'bilinear' or 'log_cubic'")
+        if log_cubic_floor_relative <= 0.0 or not np.isfinite(log_cubic_floor_relative):
+            raise ValueError("log_cubic_floor_relative must be finite and positive")
+        if log_cubic_padding_cells < 3:
+            raise ValueError("log_cubic_padding_cells must be at least 3")
         component_indices = (
             np.arange(table.density_by_component.shape[0])
             if table.component_indices is None
@@ -158,9 +193,47 @@ class CmdPriorEvaluator:
             raise ValueError("CMD table component indices are incompatible with this Galactic density")
         component_to_column = np.full(n_components, -1, dtype=int)
         component_to_column[component_indices] = np.arange(len(component_indices), dtype=int)
+        reference_centers = 0.5 * (table.reference_edges[:-1] + table.reference_edges[1:])
+        color_centers = 0.5 * (table.color_edges[:-1] + table.color_edges[1:])
+
+        smooth_log_density = None
+        smooth_active = None
+        reference_step = color_step = 1.0
+        reference_origin = color_origin = 0.0
+        if interpolation == "log_cubic":
+            if len(reference_centers) < 2 or len(color_centers) < 2:
+                raise ValueError("log_cubic CMD interpolation needs at least two bins in each coordinate")
+            reference_step = float(reference_centers[1] - reference_centers[0])
+            color_step = float(color_centers[1] - color_centers[0])
+            if not (
+                np.allclose(np.diff(reference_centers), reference_step, rtol=1.0e-6, atol=1.0e-10)
+                and np.allclose(np.diff(color_centers), color_step, rtol=1.0e-6, atol=1.0e-10)
+            ):
+                raise ValueError("log_cubic CMD interpolation requires uniformly spaced CMD bins")
+            density = np.asarray(table.density_by_component, dtype=float)
+            peak = np.max(density, axis=(1, 2), keepdims=True)
+            # The absolute term remains representable with JAX's default float32.
+            floor = np.maximum(peak * log_cubic_floor_relative, 1.0e-30)
+            log_density = np.log(np.maximum(density, floor))
+            smooth_log_density = np.pad(
+                log_density,
+                ((0, 0), (log_cubic_padding_cells, log_cubic_padding_cells), (log_cubic_padding_cells, log_cubic_padding_cells)),
+                mode="constant",
+                constant_values=float(np.log(np.min(floor))),
+            )
+            # Components can have different floors.  Restore each component's
+            # own floor in the padding rather than using the global minimum.
+            for index, value in enumerate(np.log(floor[:, 0, 0])):
+                smooth_log_density[index, :log_cubic_padding_cells, :] = value
+                smooth_log_density[index, -log_cubic_padding_cells:, :] = value
+                smooth_log_density[index, :, :log_cubic_padding_cells] = value
+                smooth_log_density[index, :, -log_cubic_padding_cells:] = value
+            smooth_active = (peak[:, 0, 0] > 0.0)
+            reference_origin = float(reference_centers[0] - log_cubic_padding_cells * reference_step)
+            color_origin = float(color_centers[0] - log_cubic_padding_cells * color_step)
         return cls(
-            reference_centers=jnp.asarray(0.5 * (table.reference_edges[:-1] + table.reference_edges[1:])),
-            color_centers=jnp.asarray(0.5 * (table.color_edges[:-1] + table.color_edges[1:])),
+            reference_centers=jnp.asarray(reference_centers),
+            color_centers=jnp.asarray(color_centers),
             density_by_component=jnp.asarray(table.density_by_component),
             log_radius_moment_by_component=jnp.asarray(
                 table.log_radius_moment_by_component
@@ -171,6 +244,15 @@ class CmdPriorEvaluator:
                 if table.log_radius_square_moment_by_component is not None else np.zeros_like(table.density_by_component)
             ),
             component_to_column=jnp.asarray(component_to_column),
+            interpolation=interpolation,
+            smooth_log_density_by_component=(
+                None if smooth_log_density is None else jnp.asarray(smooth_log_density)
+            ),
+            smooth_active_by_component=(None if smooth_active is None else jnp.asarray(smooth_active)),
+            smooth_reference_origin=reference_origin,
+            smooth_color_origin=color_origin,
+            smooth_reference_step=reference_step,
+            smooth_color_step=color_step,
         )
 
     def density_all_components(
@@ -193,6 +275,8 @@ class CmdPriorEvaluator:
             raise ValueError("magnitude_offsets must have shape (3,) or (n_component, 3)")
         absolute_reference = reference_magnitude - offsets[:, 0]
         absolute_color = color - (offsets[:, 1] - offsets[:, 2])
+        if self.interpolation == "log_cubic":
+            return self._log_cubic_all_components(absolute_reference, absolute_color)
         return self._bilinear_all_components(absolute_reference, absolute_color)
 
     def log_radius_moments_all_components(
@@ -282,6 +366,52 @@ class CmdPriorEvaluator:
             & (color <= self.color_centers[-1])
         )
         return jnp.where(valid_component & in_range, value, 0.0)
+
+    def _log_cubic_all_components(self, reference: jnp.ndarray, color: jnp.ndarray) -> jnp.ndarray:
+        """C1 Catmull--Rom interpolation of the padded log CMD density."""
+        if self.smooth_log_density_by_component is None:  # defensive: invalid manual construction
+            raise ValueError("log_cubic evaluator is missing its padded log-density table")
+        table = self.smooth_log_density_by_component
+        n_reference, n_color = table.shape[1], table.shape[2]
+        # Keep evaluation in the three-cell padded shoulder.  All samples at
+        # the clamped exterior are equal to the floor, hence both value and
+        # first derivative join smoothly to the constant tail.
+        u = (reference - self.smooth_reference_origin) / self.smooth_reference_step
+        v = (color - self.smooth_color_origin) / self.smooth_color_step
+        u = jnp.clip(u, 1.0, float(n_reference - 3))
+        v = jnp.clip(v, 1.0, float(n_color - 3))
+        i = jnp.floor(u).astype(jnp.int32)
+        j = jnp.floor(v).astype(jnp.int32)
+        tx, ty = u - i, v - j
+        wx = _catmull_rom_weights(tx)
+        wy = _catmull_rom_weights(ty)
+        columns = self.component_to_column
+        valid_component = columns >= 0
+        safe_columns = jnp.maximum(columns, 0)
+        component = jnp.arange(columns.shape[0])
+        values = table[safe_columns]
+        log_value = sum(
+            wx[a] * wy[b] * values[component, i + a - 1, j + b - 1]
+            for a in range(4)
+            for b in range(4)
+        )
+        value = jnp.exp(log_value)
+        active = (
+            jnp.ones_like(valid_component, dtype=bool)
+            if self.smooth_active_by_component is None
+            else self.smooth_active_by_component[safe_columns]
+        )
+        return jnp.where(valid_component & active, value, 0.0)
+
+
+def _catmull_rom_weights(t: jnp.ndarray) -> jnp.ndarray:
+    """Return the four C1 Catmull--Rom weights for ``t`` in [0, 1]."""
+    return jnp.stack((
+        -0.5 * t + t**2 - 0.5 * t**3,
+        1.0 - 2.5 * t**2 + 1.5 * t**3,
+        0.5 * t + 2.0 * t**2 - 1.5 * t**3,
+        -0.5 * t**2 + 0.5 * t**3,
+    ))
 
 
 @dataclass(frozen=True)

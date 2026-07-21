@@ -48,6 +48,9 @@ class IsochroneModel:
     color_range: tuple[float, float] | None = None
     population: SourcePopulation | None = None
     table: CmdPriorTable | None = None
+    cmd_interpolation: str = "bilinear"
+    log_cubic_floor_relative: float = 1.0e-12
+    log_cubic_padding_cells: int = 3
 
     def __post_init__(self) -> None:
         if len(self.color_bands) != 2:
@@ -57,6 +60,12 @@ class IsochroneModel:
                 raise ValueError(f"{name} must be a (minimum, maximum) pair")
             if bounds is not None and bounds[0] >= bounds[1]:
                 raise ValueError(f"{name} must have minimum < maximum")
+        if self.cmd_interpolation not in {"bilinear", "log_cubic"}:
+            raise ValueError("cmd_interpolation must be 'bilinear' or 'log_cubic'")
+        if self.log_cubic_floor_relative <= 0.0:
+            raise ValueError("log_cubic_floor_relative must be positive")
+        if self.log_cubic_padding_cells < 3:
+            raise ValueError("log_cubic_padding_cells must be at least 3")
 
     @property
     def coordinates(self) -> CmdCoordinates:
@@ -216,7 +225,11 @@ class GalaxyModel:
         runtime_dust = ExponentialDustModel.from_exponential(dust, self.isochrone.coordinates)
         source_prior = SourceCmdPrior(
             density=self.density,
-            cmd_prior=self.isochrone.table.evaluator(),
+            cmd_prior=self.isochrone.table.evaluator(
+                interpolation=self.isochrone.cmd_interpolation,
+                log_cubic_floor_relative=self.isochrone.log_cubic_floor_relative,
+                log_cubic_padding_cells=self.isochrone.log_cubic_padding_cells,
+            ),
             offset_calculator=lambda ds_kpc, context: runtime_dust.offsets(ds_kpc),
         )
         conditional = EventPrior5D(self.density, source_prior, include_event_rate=self.include_event_rate)
