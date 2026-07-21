@@ -254,6 +254,13 @@ class GenulensSourceModel:
     offset_provider: OffsetProvider | None = None
     min_initial_mass_msun: float = 0.09
     max_initial_mass_msun: float = 1.0
+    # CMD likelihoods for a precise source can be dominated by short-lived
+    # post-main-sequence phases.  A random IMF draw represents those phases
+    # with one or zero rows, then histogram smoothing can turn that accident
+    # into a spurious distance mode.  Use equal-IMF-probability quadrature
+    # points instead.  This is intentionally much denser than the legacy
+    # 4096 Monte-Carlo draws.
+    cmd_imf_quadrature_points: int = 8192
     samples_per_population_point: int = 4096
 
     def build_evidence_grid(
@@ -324,6 +331,7 @@ class GenulensSourceModel:
             population_points_provider=self._population_points_provider(),
             min_initial_mass_msun=self.min_initial_mass_msun,
             max_initial_mass_msun=self.max_initial_mass_msun,
+            imf_quadrature_points=self.cmd_imf_quadrature_points,
             samples_per_population_point=self.samples_per_population_point,
         ).build(
             coordinates,
@@ -947,6 +955,7 @@ class GenulensCmdPriorBuilder:
     population_component_mapper: PopulationComponentMapper = genulens_population_component
     min_initial_mass_msun: float = 0.09
     max_initial_mass_msun: float = 1.0
+    imf_quadrature_points: int = 8192
     samples_per_population_point: int = 4096
 
     def build(
@@ -959,8 +968,8 @@ class GenulensCmdPriorBuilder:
         smoothing: CmdSmoothing | None = None,
         component_indices: Sequence[ComponentIndex] = tuple(range(11)),
     ) -> CmdPriorTable:
-        if self.samples_per_population_point <= 0:
-            raise ValueError("samples_per_population_point must be positive")
+        if self.imf_quadrature_points <= 0:
+            raise ValueError("imf_quadrature_points must be positive")
         samples = {
             int(component): self._sample_component(int(component), coordinates, index)
             for index, component in enumerate(component_indices)
@@ -974,6 +983,8 @@ class GenulensCmdPriorBuilder:
             smoothing=smoothing,
             metadata={
                 "backend": "genulens.ForwardSourceGenerator",
+                "cmd_sampling": "deterministic_equal_imf_probability_quadrature",
+                "imf_quadrature_points": self.imf_quadrature_points,
                 "samples_per_population_point": self.samples_per_population_point,
                 "min_initial_mass_msun": self.min_initial_mass_msun,
                 "max_initial_mass_msun": self.max_initial_mass_msun,
@@ -995,8 +1006,14 @@ class GenulensCmdPriorBuilder:
             if population_weight <= 0.0:
                 continue
             query = self._query(component, point)
-            seed = 1 + 1009 * component_position + 65537 * point_index
-            result = self.generator.sample_many(query, self.samples_per_population_point, seed)
+            quadrature = getattr(self.generator, "imf_quadrature", None)
+            if quadrature is None:
+                raise RuntimeError(
+                    "The installed genulens binding lacks ForwardSourceGenerator.imf_quadrature. "
+                    "Build genulens with the source-CMD IMF-quadrature API; random source draws are "
+                    "not valid for a precision CMD likelihood."
+                )
+            result = quadrature(query, self.imf_quadrature_points)
             observables = GenulensSourceEvidenceBuilder._samples_from_result(result, 10.0, {})
             for band in coordinates.bands:
                 try:
@@ -1005,6 +1022,8 @@ class GenulensCmdPriorBuilder:
                     raise ValueError(f"genulens source table is missing CMD band {band!r}") from exc
             radii.append(np.asarray(observables.radius_rsun, dtype=float))
             n_rows = len(observables.radius_rsun)
+            # imf_quadrature uses equal-probability bins of the IMF CDF, so
+            # every returned point has the same quadrature weight.
             weights.append(np.full(n_rows, population_weight / n_rows, dtype=float))
         if not weights:
             raise ValueError(f"source population has no positive-weight points for component {component}")

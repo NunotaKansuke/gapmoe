@@ -69,6 +69,11 @@ class _FakeGenerator:
             to_numpy=lambda: rows,
         )
 
+    def imf_quadrature(self, query, n_points):
+        # The deterministic API has the same tabular contract as sample_many;
+        # its input masses are fixed equal-probability IMF quantiles.
+        return self.sample_many(query, n_points, seed=0)
+
 
 def _fake_genulens(points):
     return SimpleNamespace(
