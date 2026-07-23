@@ -33,8 +33,11 @@ def calc_vEarth(t_jd, ra_deg, dec_deg):
 
     velocity = np.array([np.interp(t, t_grid, table[:, i]) for i in range(4, 7)])
     north, east = _north_east_basis(ra_deg, dec_deg)
-    v_north = -float(np.dot(velocity, north)) * _DAY_PER_YEAR
-    v_east = -float(np.dot(velocity, east)) * _DAY_PER_YEAR
+    # The Horizons table contains the barycentric velocity of Earth itself.
+    # Project it directly: the geocentric-to-heliocentric mapping adds the
+    # Earth's velocity, not the opposite Sun/reflex velocity.
+    v_north = float(np.dot(velocity, north)) * _DAY_PER_YEAR
+    v_east = float(np.dot(velocity, east)) * _DAY_PER_YEAR
     return v_north, v_east
 
 

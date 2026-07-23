@@ -326,13 +326,20 @@ class MurelHistogram:
             block_slice = density.murel.block_slices[key]
             block = density.murel.rows[block_slice]
             mu_x, mu_y = _unique_xy(block[block[:, 2] > 0.0, 2], block[block[:, 2] > 0.0, 4])
-            phi_x, phi_y = _unique_xy(block[:, 3], block[:, 5])
+            # ``calc_murel_dist`` emits ``max(n_mu_bins, n_phi_bins)`` rows
+            # per distance pair.  The shorter marginal is padded with zero
+            # coordinates.  Treating that padding as a phi bin collapses many
+            # source-group rows onto one coordinate, making its length differ
+            # from ``phi_x`` (and, more importantly, mixes non-phi entries
+            # into the conditional source histogram).
+            valid_phi = block[:, 3] != 0.0
+            phi_x, phi_y = _unique_xy(block[valid_phi, 3], block[valid_phi, 5])
             valid_mu = block[:, 2] > 0.0
             if density.murel.has_source_groups:
                 assert density.murel.source_group_mu is not None
                 assert density.murel.source_group_phi is not None
                 mu_group = density.murel.source_group_mu[block_slice][valid_mu]
-                phi_group = density.murel.source_group_phi[block_slice]
+                phi_group = density.murel.source_group_phi[block_slice][valid_phi]
             else:
                 mu_group = np.repeat(mu_y[:, None], len(SOURCE_GROUP_NAMES), axis=1)
                 phi_group = np.repeat(phi_y[:, None], len(SOURCE_GROUP_NAMES), axis=1)
